@@ -1,0 +1,56 @@
+# Dependencias y resultados de compilación/pruebas
+node_modules/
+coverage/
+dist/
+build/
+.cache/
+
+# Variables de entorno locales. Sólo se versionan plantillas sanitizadas.
+.env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+!**/.env.example
+
+# Procesos y registros de ejecución
+*.pid
+*.log
+*.log.*
+npm-debug.log*
+*.tmp
+
+# Bases de datos, certificados y claves generados localmente
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.pem
+*.key
+*.crt
+
+# Configuración y estado persistente de esta instalación
+dev/server/config/alarms.json
+dev/server/config/music.json
+dev/server/config/music-credits.json
+dev/server/config/music-assistant-credentials.json
+dev/server/config/server.json
+dev/satellite/config/assistant.json
+dev/satellite/config/audio.json
+
+# Datos y secretos heredados de Music Assistant
+dev/server/music-assistant/data/
+dev/server/.music-assistant.env
+
+# Modelos y entornos locales grandes
+dev/server/models/
+dev/satellite/models/
+dev/satellite/.venv/
+
+# Sistema operativo y editores
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~

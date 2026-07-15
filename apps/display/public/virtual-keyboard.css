@@ -1,0 +1,21 @@
+.virtual-keyboard[hidden] { display: none; }
+.virtual-keyboard { position: fixed; z-index: 1000; right: 0; bottom: 0; left: 0; padding: .55rem max(.65rem, env(safe-area-inset-right)) max(.65rem, env(safe-area-inset-bottom)) max(.65rem, env(safe-area-inset-left)); background: rgba(8, 12, 19, .98); border-top: 1px solid rgba(255,255,255,.2); box-shadow: 0 -12px 35px rgba(0,0,0,.5); backdrop-filter: blur(18px); }
+.virtual-keyboard-header { display: flex; justify-content: space-between; align-items: center; max-width: 900px; margin: 0 auto .4rem; color: #9fc1ff; font-weight: 700; }
+.virtual-keyboard-header button { width: 2.5rem; height: 2rem; padding: 0; color: #fff; background: transparent; border: 0; font-size: 1.8rem; line-height: 1; }
+.virtual-keyboard-rows { display: grid; gap: .35rem; max-width: 900px; margin: auto; }
+.virtual-keyboard-row { display: flex; gap: .35rem; }
+.virtual-key { flex: 1 1 0; min-width: 0; min-height: 2.75rem; padding: .2rem; color: #fff; background: #263346; border: 1px solid rgba(255,255,255,.14); border-radius: .55rem; font-size: clamp(1rem, 2.7vw, 1.35rem); font-weight: 650; box-shadow: 0 2px 0 #111823; }
+.virtual-key:active, .virtual-key.active { background: #397ee5; transform: translateY(1px); box-shadow: 0 1px 0 #111823; }
+.virtual-key.key-space { flex-grow: 5; }
+.virtual-key.key-done { background: #397ee5; }
+.virtual-key.key-backspace, .virtual-key.key-shift { background: #34445b; }
+body.virtual-keyboard-open { padding-bottom: 20rem; }
+body.virtual-keyboard-open main { min-height: calc(100vh - 20rem) !important; }
+@media (max-height: 600px) {
+  .virtual-keyboard { padding-top: .3rem; }
+  .virtual-keyboard-header { margin-bottom: .2rem; }
+  .virtual-keyboard-rows { gap: .22rem; }
+  .virtual-keyboard-row { gap: .22rem; }
+  .virtual-key { min-height: 2.2rem; font-size: 1rem; }
+  body.virtual-keyboard-open { padding-bottom: 16.5rem; }
+}

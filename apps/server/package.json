@@ -1,0 +1,19 @@
+{
+  "name": "@ha/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch src/index.js",
+    "start": "node src/index.js",
+    "check": "node --check src/index.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@ha/contracts": "0.1.0",
+    "@ha/shared": "0.1.0",
+    "@mozilla/readability": "^0.6.0",
+    "linkedom": "^0.18.13",
+    "ws": "^8.18.0"
+  }
+}

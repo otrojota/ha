@@ -1,0 +1,16 @@
+{
+  "credits": [
+    {
+      "isrc": "CLXXX2600001",
+      "title": "Gente Cansada",
+      "creditedArtist": "Proyecto Jota",
+      "vocalists": ["Nombre del vocalista"],
+      "performers": [
+        { "name": "Nombre del músico", "role": "guitarra" }
+      ],
+      "composers": ["Nombre del compositor"],
+      "lyricists": ["Nombre del letrista"],
+      "producers": ["Nombre del productor"]
+    }
+  ]
+}

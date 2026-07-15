@@ -1,0 +1,11 @@
+{
+  "name": "@ha/display",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "serve public -l 8080",
+    "start": "serve public -l 8080",
+    "check": "node --check public/app.js"
+  },
+  "devDependencies": { "serve": "^14.2.4" }
+}

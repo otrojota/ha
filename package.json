@@ -1,0 +1,26 @@
+{
+  "name": "ha-voice-assistant",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Monorepo para un asistente de voz modular basado en LLM y herramientas.",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "services/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:server": "npm run dev --workspace @ha/server",
+    "dev:satellite": "npm run dev --workspace @ha/satellite",
+    "dev:display": "npm run dev --workspace @ha/display",
+    "dev:music": "npm run dev --workspace @ha/music-gateway",
+    "start": "npm run start --workspace @ha/server",
+    "check": "npm run check --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
+
