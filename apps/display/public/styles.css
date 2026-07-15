@@ -17,6 +17,10 @@ button { touch-action: manipulation; }
 .playback-album, .playback-device, .playback-time { margin-top: .25rem; color: #aeb8c7; }
 .playback-progress { height: .45rem; margin-top: 1rem; overflow: hidden; border-radius: 999px; background: rgba(255,255,255,.12); }
 .playback-progress > div { width: 0; height: 100%; background: #65e994; transition: width .5s linear; }
+.playback-volume { display: grid; grid-template-columns: auto 1fr 3rem; align-items: center; gap: .65rem; margin-top: .8rem; }
+.playback-volume input { width: 100%; height: 2rem; accent-color: #65e994; touch-action: pan-x; }
+.playback-volume input:disabled { opacity: .38; }
+.playback-volume output { color: #dce6f5; text-align: right; font-variant-numeric: tabular-nums; }
 .playback-controls { display: flex; align-items: center; justify-content: center; gap: .8rem; margin-top: 1rem; }
 .playback-control { display: grid; place-items: center; width: 3.5rem; height: 3.5rem; padding: 0; color: #eef5ff; background: rgba(255,255,255,.09); border: 1px solid rgba(255,255,255,.18); border-radius: 50%; font-size: 1.2rem; line-height: 1; transition: transform .12s, background .12s, opacity .12s; }
 .playback-control.primary { width: 4.25rem; height: 4.25rem; color: #07130c; background: #65e994; border-color: #65e994; font-size: 1.65rem; box-shadow: 0 .35rem 1rem rgba(101,233,148,.22); }
@@ -56,15 +60,13 @@ button { touch-action: manipulation; }
 .destination-actions { display: grid; gap: 1rem; width: min(100%, 850px); margin: 0 auto; }
 .destination-list { display: grid; gap: 1rem; width: min(100%, 850px); margin: 0 auto 2rem; }
 .destination-card { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 1rem; min-height: 7rem; padding: 1.15rem 1.35rem; color: #fff; text-align: left; background: rgba(255,255,255,.075); border: 1px solid rgba(255,255,255,.14); border-radius: 1.25rem; }
+.destination-card.active { border-color: #65e994; background: rgba(47, 176, 103, .2); box-shadow: inset 0 0 0 1px rgba(101,233,148,.2), 0 0 1.1rem rgba(47,176,103,.12); }
+.destination-card.active .destination-icon { color: #07130c; background: #65e994; }
+.destination-card.active .selection-mark { color: #07130c; background: #65e994; border-color: #65e994; }
 .destination-card.offline { opacity: .62; }
 .destination-card strong { display: block; font-size: 1.35rem; }
 .destination-card small { display: block; margin-top: .25rem; color: #aeb8c7; }
 .destination-card .save-button.compact { width: auto; min-height: 3rem; padding: .6rem 1rem; }
-.spotify-setup-guide { width: min(100%, 850px); margin: 1rem auto 1.5rem; padding: 1rem 1.25rem; color: #d9e1ec; background: rgba(30,215,96,.08); border: 1px solid rgba(30,215,96,.28); border-radius: 1rem; }
-.spotify-setup-guide summary { cursor: pointer; font-size: 1.15rem; font-weight: 700; }
-.spotify-setup-guide ol { display: grid; gap: .7rem; margin: 1rem 0; padding-left: 1.5rem; }
-.spotify-setup-guide p { margin: 0; color: #aeb8c7; }
-.spotify-setup-guide a { color: #65e994; }
 .destination-icon { display: grid; place-items: center; width: 3.4rem; height: 3.4rem; border-radius: 1rem; background: rgba(61,130,235,.2); font-size: 1.7rem; }
 .availability-dot { display: inline-block; width: .65rem; height: .65rem; margin-right: .45rem; border-radius: 50%; background: #697688; }
 .availability-dot.online { background: #3ddc84; box-shadow: 0 0 .65rem rgba(61,220,132,.55); }

@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 function captureInput(deviceId) {
+  if (!deviceId) return process.platform === "darwin" ? ["-f", "avfoundation", "-i", ":default"] : ["-f", "pulse", "-i", "default"];
   const avfoundation = /^avfoundation:(\d+)$/.exec(deviceId || "");
   if (avfoundation) return ["-f", "avfoundation", "-i", `:${avfoundation[1]}`];
   if (deviceId && !deviceId.startsWith("simulated-")) return ["-f", "pulse", "-i", deviceId];

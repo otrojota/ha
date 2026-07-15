@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "node --watch src/index.js",
     "start": "node src/index.js",
-    "check": "node --check src/index.js && node --check src/destination-store.js && node --check src/destination-service.js && node --check src/spotify-connect.js && node --check src/music-credits.js",
+    "check": "node --check src/index.js && node --check src/destination-store.js && node --check src/music-assistant-provider.js",
     "test": "node --test src/*.test.js"
   },
   "dependencies": { "@ha/shared": "0.1.0" }

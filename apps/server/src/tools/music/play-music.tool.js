@@ -4,13 +4,14 @@ export function createPlayMusicTool({ music }) {
       type: "function",
       function: {
         name: "music_play",
-        description: "Reproduce una selección continua temporal. Usa mode=artist para 'música de X', mode=similar para 'del estilo de X', mode=playlist para una lista existente y mode=custom para una cola temporal con varios criterios. Nunca crea ni guarda playlists. Un destino mencionado queda activo persistentemente.",
+        description: "Reproduce una selección continua temporal. Usa mode=artist para 'música de X', mode=album para un álbum completo desde el inicio, mode=similar para 'del estilo de X', mode=playlist para una lista existente y mode=custom para una cola temporal con varios criterios. Nunca crea ni guarda playlists. Un destino mencionado queda activo persistentemente.",
         parameters: {
           type: "object",
           properties: {
             query: { type: "string", description: "Artista, estilo, descripción o nombre principal solicitado" },
             destination: { type: "string", description: "Nombre, alias o habitación mencionada; omitir para usar el destino activo" },
-            mode: { type: "string", enum: ["auto", "artist", "similar", "playlist", "custom"] },
+            source: { type: "string", description: "Origen de Music Assistant mencionado, por ejemplo Tidal, Spotify o biblioteca local; omitir para usar el origen activo" },
+            mode: { type: "string", enum: ["auto", "artist", "album", "similar", "playlist", "custom"] },
             searches: { type: "array", items: { type: "string" }, maxItems: 12, description: "Búsquedas concretas para construir una cola temporal en mode=custom" },
             shuffle: { type: "boolean", description: "Usar orden aleatorio; normalmente true salvo petición contraria" }
           },
@@ -18,10 +19,15 @@ export function createPlayMusicTool({ music }) {
         }
       }
     },
-    async execute({ query, destination, mode = "auto", searches = [], shuffle = true }) {
+    async execute({ query, destination, source, mode = "auto", searches = [], shuffle = true, mediaUri }) {
       if (!String(query || "").trim()) throw new Error("Indica qué música reproducir");
-      const result = await music.play({ query, destination, mode, searches, shuffle });
-      return { status: result.status, item: result.item, destination: result.destination.alias || result.destination.name };
+      const effectiveShuffle = mode === "album" ? false : shuffle;
+      const result = await music.play({ query, destination, mode, searches, shuffle: effectiveShuffle, ...(source ? { source } : {}), ...(mediaUri ? { mediaUri } : {}) });
+      if (result.clarificationRequired) return {
+        clarificationRequired: true, query: result.query, choices: result.choices,
+        request: { destination, source, mode, shuffle: effectiveShuffle }
+      };
+      return { status: result.status, item: result.item, destination: result.destination.alias || result.destination.name, source: result.source?.name };
     }
   };
 }

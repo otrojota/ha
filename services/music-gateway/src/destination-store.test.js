@@ -1,75 +1,63 @@
-import assert from "node:assert/strict";
-import { mkdtemp, readFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import test from "node:test";
-import { DestinationStore, publicIntegrationConfig } from "./destination-store.js";
+import assert from "node:assert/strict";
+import { DestinationStore } from "./destination-store.js";
 
-const discovered = {
-  id: "spotify:eversolo",
-  providerDeviceId: "eversolo",
-  name: "Eversolo DMP-A6",
-  source: "spotify-connect",
-  available: true,
-  routes: [{ id: "spotify:eversolo:connect", label: "Spotify Connect", available: true }]
-};
+const players = [
+  { id: "sendspin:kitchen", name: "Satellite Kitchen", available: true, enabled: true },
+  { id: "sonos:living", name: "Sonos", available: true, enabled: true }
+];
 
-async function createStore() {
-  const directory = await mkdtemp(join(tmpdir(), "ha-music-store-"));
-  const store = new DestinationStore(join(directory, "music.json"));
-  await store.load();
-  return store;
-}
-
-test("agrega un dispositivo Spotify y preserva sus ajustes", async () => {
-  const store = await createStore();
-  await store.addDestination(discovered);
-  await store.updateDestination(discovered.id, { alias: "Equipo principal", room: "Living" });
-  await store.addDestination({ ...discovered, name: "Eversolo" });
-  assert.deepEqual(store.listDestinations().map(({ name, alias, room }) => ({ name, alias, room })), [
-    { name: "Eversolo", alias: "Equipo principal", room: "Living" }
-  ]);
+test("resuelve destinos de Music Assistant por nombre y alias", async () => {
+  const store = new DestinationStore("/tmp/unused-music-store.json");
+  store.state.preferences["sendspin:kitchen"] = { alias: "Parlante cocina", room: "Cocina", enabled: true };
+  assert.equal(store.resolve(players, "cocina").id, "sendspin:kitchen");
+  assert.equal(store.resolve(players, "Sonos").id, "sonos:living");
 });
 
-test("actualiza disponibilidad sin borrar un destino agregado", async () => {
-  const store = await createStore();
-  await store.addDestination(discovered);
-  await store.updateSpotifyAvailability([]);
-  assert.equal(store.listDestinations()[0].available, false);
+test("resuelve directamente el identificador opaco enviado por el display", () => {
+  const opaqueId = "up1769bcb7e82a11f0a7c6800a805c1d06";
+  const store = new DestinationStore("/tmp/unused-music-store.json");
+  const result = store.resolve([{ id: opaqueId, name: "DMP-A6", available: true, enabled: true }], opaqueId);
+  assert.equal(result.id, opaqueId);
 });
 
-test("no expone tokens OAuth de Spotify", async () => {
-  const store = await createStore();
-  await store.updateSpotifyIntegration({ clientId: "client", accessToken: "access-secret", refreshToken: "refresh-secret" });
-  assert.deepEqual(publicIntegrationConfig(store.getSpotifyIntegration()), {
-    clientId: "client",
-    redirectUri: "http://127.0.0.1:3100/v1/integrations/spotify/callback",
-    connected: true
-  });
-  assert.match(await readFile(store.path, "utf8"), /refresh-secret/);
-  assert.doesNotMatch(JSON.stringify(publicIntegrationConfig(store.getSpotifyIntegration())), /secret/);
+test("resuelve destinos con números hablados y transcripciones fonéticas", () => {
+  const store = new DestinationStore("/tmp/unused-music-store.json");
+  const eversolos = [
+    { id: "eversolo-1", name: "Eversolo 1", available: true, enabled: true },
+    { id: "eversolo-2", name: "Eversolo 2", available: true, enabled: true }
+  ];
+  assert.equal(store.resolve(eversolos, "e ver solo uno").id, "eversolo-1");
+  assert.equal(store.resolve(eversolos, "haber solo dos").id, "eversolo-2");
+  assert.throws(() => store.resolve(eversolos, "haber solo"), /ambiguo/);
 });
 
-test("persiste el destino activo y permite resolverlo por alias", async () => {
-  const store = await createStore();
-  await store.addDestination(discovered);
-  await store.updateDestination(discovered.id, { alias: "Eversolo", room: "Living" });
-  const second = {
-    ...discovered,
-    id: "spotify:macbook",
-    providerDeviceId: "macbook",
-    name: "MacBook Pro",
-    routes: [{ id: "spotify:macbook:connect", label: "Spotify Connect", available: true }]
-  };
-  await store.addDestination(second);
-  const active = await store.setActiveDestination("MacBook Pro");
-  assert.equal(active.id, second.id);
+test("decora la lista de MA sin inventar destinos locales", () => {
+  const store = new DestinationStore("/tmp/unused-music-store.json");
+  store.state.activeDestinationId = "sonos:living";
+  const result = store.decorate(players);
+  assert.equal(result.length, 2);
+  assert.equal(result[1].active, true);
+});
 
-  const restored = new DestinationStore(store.path);
-  await restored.load();
-  assert.equal(restored.getActiveDestination().id, second.id);
-  assert.equal(restored.resolveDestination("Eversolo").id, discovered.id);
-  assert.equal(restored.resolveDestination("DMP A6").id, discovered.id);
-  assert.equal(restored.resolveDestination("DMPA6").id, discovered.id);
-  await assert.rejects(() => restored.setActiveDestination("Dormitorio"), /No existe un destino agregado/);
+test("conserva y resuelve el origen activo por nombre", async () => {
+  const store = new DestinationStore("/tmp/unused-music-store.json");
+  store.save = async () => {};
+  const sources = [
+    { id: "tidal--abc", domain: "tidal", name: "Tidal", available: true, streaming: true },
+    { id: "filesystem--local", domain: "filesystem_local", name: "Archivos locales", available: true, streaming: false }
+  ];
+  assert.equal(store.resolveSource(sources).id, "tidal--abc");
+  assert.equal((await store.setActiveSource(sources, "archivos locales")).id, "filesystem--local");
+  assert.equal(store.resolveSource(sources).id, "filesystem--local");
+});
+
+test("resuelve orígenes por transcripciones normalizadas y difusas", () => {
+  const store = new DestinationStore("/tmp/unused-music-store.json");
+  const sources = [
+    { id: "spotify--home", domain: "spotify", name: "Spotify", available: true },
+    { id: "tidal--home", domain: "tidal", name: "Tidal", available: true }
+  ];
+  assert.equal(store.resolveSource(sources, "spot if i").id, "spotify--home");
+  assert.equal(store.resolveSource(sources, "tid all").id, "tidal--home");
 });

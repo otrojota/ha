@@ -18,11 +18,24 @@ test("music_play pasa el destino mencionado para activarlo y reproducir", async 
   assert.equal(result.destination, "Eversolo");
 });
 
+test("music_play fuerza orden normal al reproducir un álbum completo", async () => {
+  let received;
+  const tool = createPlayMusicTool({ music: { async play(command) {
+    received = command;
+    return { status: "playing", item: { name: "In the Flesh?" }, destination: { name: "DMP-A6" } };
+  } } });
+
+  await tool.execute({ query: "The Wall Pink Floyd", mode: "album", shuffle: true });
+
+  assert.equal(received.mode, "album");
+  assert.equal(received.shuffle, false);
+});
+
 test("music_set_active_destination delega la validación al gateway", async () => {
   const tool = createSetActiveMusicDestinationTool({
-    music: { setActiveDestination: async (destination) => ({ id: "spotify:dmp", name: destination, active: true }) }
+    music: { setActiveDestination: async (destination) => ({ id: "ma:dmp", name: destination, active: true }) }
   });
   assert.deepEqual(await tool.execute({ destination: "Eversolo" }), {
-    id: "spotify:dmp", name: "Eversolo", room: undefined, active: true
+    id: "ma:dmp", name: "Eversolo", room: undefined, active: true
   });
 });

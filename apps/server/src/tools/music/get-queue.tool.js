@@ -2,7 +2,7 @@ export function createGetMusicQueueTool({ music, spokenLimit = 10 }) {
   return {
     definition: { type: "function", function: {
       name: "music_get_queue",
-      description: "Consulta la cola real de Spotify: canción actual y próximas canciones. Úsala siempre cuando pidan ver, mostrar, listar o consultar la cola de reproducción. Resume para voz sin inventar elementos.",
+      description: "Consulta la cola real de Music Assistant. Úsala siempre cuando pidan ver, mostrar, listar o consultar la cola de reproducción. Resume para voz sin inventar elementos.",
       parameters: { type: "object", properties: {}, additionalProperties: false }
     } },
     async execute(args) {

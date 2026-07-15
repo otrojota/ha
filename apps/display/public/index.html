@@ -19,7 +19,7 @@
           </div>
         </header>
         <div class="row g-4 my-auto">
-          <div class="col-md-6"><article class="panel playback-panel p-4 h-100"><div class="playback-cover-wrap"><img id="playback-cover" class="playback-cover" alt="Portada de la reproducción actual"><div id="playback-cover-placeholder" class="playback-cover-placeholder" aria-hidden="true">♫</div></div><div class="playback-info"><div class="text-secondary">Reproducción actual</div><h2 id="track">Sin reproducción</h2><div id="playback-artists" class="playback-artists"></div><div id="playback-album" class="playback-album"></div><div id="device" class="playback-device">Dispositivo: --</div><div class="playback-progress" aria-label="Progreso"><div id="playback-progress-bar"></div></div><div id="playback-time" class="playback-time"></div><div class="playback-controls" aria-label="Controles de reproducción"><button id="playback-previous" class="playback-control" type="button" aria-label="Canción anterior">◀▮</button><button id="playback-toggle" class="playback-control primary" type="button" aria-label="Reproducir" disabled>▶</button><button id="playback-next" class="playback-control" type="button" aria-label="Siguiente canción">▮▶</button></div><div id="playback-controls-status" class="playback-controls-status" role="status" aria-live="polite"></div></div></article></div>
+          <div class="col-md-6"><article class="panel playback-panel p-4 h-100"><div class="playback-cover-wrap"><img id="playback-cover" class="playback-cover" alt="Portada de la reproducción actual"><div id="playback-cover-placeholder" class="playback-cover-placeholder" aria-hidden="true">♫</div></div><div class="playback-info"><div class="text-secondary">Reproducción actual</div><h2 id="track">Sin reproducción</h2><div id="playback-artists" class="playback-artists"></div><div id="playback-album" class="playback-album"></div><div id="device" class="playback-device">Dispositivo: --</div><div class="playback-progress" aria-label="Progreso"><div id="playback-progress-bar"></div></div><div id="playback-time" class="playback-time"></div><div class="playback-volume"><span aria-hidden="true">🔈</span><input id="playback-volume" type="range" min="0" max="100" step="1" value="50" aria-label="Volumen del destino activo" disabled><output id="playback-volume-value" for="playback-volume">--</output></div><div class="playback-controls" aria-label="Controles de reproducción"><button id="playback-previous" class="playback-control" type="button" aria-label="Canción anterior">◀▮</button><button id="playback-toggle" class="playback-control primary" type="button" aria-label="Reproducir" disabled>▶</button><button id="playback-next" class="playback-control" type="button" aria-label="Siguiente canción">▮▶</button></div><div id="playback-controls-status" class="playback-controls-status" role="status" aria-live="polite"></div></div></article></div>
           <div class="col-md-6"><article class="panel p-4 h-100"><div class="text-secondary">Conversación</div><p id="transcript" class="fs-5">Esperando voz…</p><p id="response" class="fs-3" role="status" aria-live="polite">Hola, estoy listo.</p><div class="audio-meter" aria-label="Nivel del micrófono"><div class="audio-meter-header"><span>Micrófono</span><span id="audio-level-db">−60 dB</span></div><div class="audio-meter-track"><div id="audio-level-bar" class="audio-meter-bar"></div><div id="audio-level-peak" class="audio-meter-peak"></div></div></div></article></div>
         </div>
       </section>
@@ -33,6 +33,8 @@
               <button class="setting-card" data-screen="server-screen"><span class="setting-icon">🖥</span><span><strong>Servidor</strong><small id="server-summary">Buscando…</small></span><span class="chevron">›</span></button>
               <button class="setting-card" data-screen="assistant-screen"><span class="setting-icon">✨</span><span><strong>Nombre del asistente</strong><small id="assistant-summary">Asistente</small></span><span class="chevron">›</span></button>
               <button class="setting-card" data-screen="location-screen"><span class="setting-icon">📍</span><span><strong>Ubicación</strong><small id="location-summary">Sin configurar</small></span><span class="chevron">›</span></button>
+              <button class="setting-card" data-screen="music-assistant-screen"><span class="setting-icon">♫</span><span><strong>Music Assistant</strong><small id="music-assistant-summary">Comprobando…</small></span><span class="chevron">›</span></button>
+              <button class="setting-card" data-screen="music-sources-screen"><span class="setting-icon">◉</span><span><strong>Orígenes de música</strong><small id="music-sources-menu-summary">Sin explorar</small></span><span class="chevron">›</span></button>
               <button class="setting-card" data-screen="music-destinations-screen"><span class="setting-icon">🎵</span><span><strong>Destinos de música</strong><small id="music-destinations-summary">Sin explorar</small></span><span class="chevron">›</span></button>
             </div>
           </section>
@@ -42,6 +44,7 @@
               <button class="setting-card" data-audio-kind="input"><span class="setting-icon">🎙</span><span><strong>Audio de entrada</strong><small id="input-summary">Sin configurar</small></span><span class="chevron">›</span></button>
               <button class="setting-card" data-audio-kind="output"><span class="setting-icon">🔊</span><span><strong>Audio de salida</strong><small id="output-summary">Sin configurar</small></span><span class="chevron">›</span></button>
               <button class="setting-card" data-screen="voice-screen"><span class="setting-icon">🗣</span><span><strong>Voz del asistente</strong><small id="voice-summary">Automática</small></span><span class="chevron">›</span></button>
+              <button class="setting-card" data-screen="music-player-screen"><span class="setting-icon">♫</span><span><strong>Parlante Music Assistant</strong><small id="music-player-summary">Cargando…</small></span><span class="chevron">›</span></button>
             </div>
           </section>
         </div>
@@ -87,6 +90,19 @@
         <div id="voice-list" class="device-list"></div>
       </section>
 
+      <section id="music-player-screen" class="screen">
+        <header class="screen-header"><button class="back-button" data-screen="settings-screen">‹</button><div><div class="eyebrow">Audio</div><h1>Parlante Music Assistant</h1></div></header>
+        <p class="text-secondary fs-5">El satélite se anuncia en Music Assistant mediante Sendspin. Esta salida es independiente de la voz TTS.</p>
+        <form id="music-player-form" class="destination-form">
+          <label>Nombre visible en Music Assistant<input id="music-player-name" class="assistant-name-input" maxlength="80" required></label>
+          <label>Dispositivo de salida Sendspin<input id="music-player-output" type="hidden"></label>
+          <div id="music-player-output-list" class="device-list compact-list" aria-label="Dispositivo de salida Sendspin"></div>
+          <label class="switch-row"><span><strong>Exponer este satélite</strong><small>Permite que Music Assistant lo use como destino.</small></span><input id="music-player-enabled" type="checkbox" role="switch"></label>
+          <button class="save-button" type="submit">Guardar y reiniciar reproductor</button>
+        </form>
+        <div id="music-player-status" class="status-message mt-3" role="status"></div>
+      </section>
+
       <section id="location-screen" class="screen">
         <header class="screen-header"><button class="back-button" data-screen="settings-screen">‹</button><div><div class="eyebrow">Servidor</div><h1>Ubicación</h1></div></header>
         <p class="text-secondary fs-5">Se usa para clima, pronóstico y consultas locales. La detección por IP es sólo aproximada.</p>
@@ -104,40 +120,31 @@
         <div id="location-status" class="status-message mt-3" role="status"></div>
       </section>
 
+      <section id="music-assistant-screen" class="screen">
+        <header class="screen-header"><button class="back-button" data-screen="settings-screen">‹</button><div><div class="eyebrow">Música</div><h1>Conectar Music Assistant</h1></div></header>
+        <p class="text-secondary fs-5">Inicia sesión una sola vez. El servidor creará un token exclusivo para Music Gateway y descartará inmediatamente la contraseña.</p>
+        <form id="music-assistant-form" class="destination-form">
+          <label>Usuario de Music Assistant<input id="music-assistant-username" class="assistant-name-input" autocomplete="username" required></label>
+          <label>Contraseña<input id="music-assistant-password" class="assistant-name-input" type="password" autocomplete="current-password" required></label>
+          <button class="save-button" type="submit">Conectar</button>
+        </form>
+        <div id="music-assistant-status" class="status-message mt-3" role="status"></div>
+      </section>
+
       <section id="music-destinations-screen" class="screen">
         <header class="screen-header"><button class="back-button" data-screen="settings-screen">‹</button><div><div class="eyebrow">Música</div><h1>Destinos</h1></div></header>
-        <p class="text-secondary fs-5">Equipos donde el asistente puede reproducir música. Los ajustes locales se conservan aunque un equipo se desconecte.</p>
-        <div class="destination-actions">
-          <button class="setting-card" data-screen="spotify-connect-screen"><span class="setting-icon">♫</span><span><strong>Spotify Connect</strong><small id="spotify-connect-summary">Sin configurar</small></span><span class="chevron">›</span></button>
-        </div>
+        <p class="text-secondary fs-5">Reproductores disponibles en Music Assistant. Aquí puedes elegir los nombres y habitaciones que entenderá el asistente.</p>
+        <div class="destination-actions"><button id="discover-music-destinations" class="save-button" type="button">Actualizar desde Music Assistant</button></div>
         <div id="music-destinations-status" class="status-message mt-3" role="status"></div>
         <div id="music-destinations-list" class="destination-list"></div>
       </section>
 
-      <section id="spotify-connect-screen" class="screen">
-        <header class="screen-header"><button class="back-button" data-screen="music-destinations-screen">‹</button><div><div class="eyebrow">Destinos de música</div><h1>Spotify Connect</h1></div></header>
-        <p class="text-secondary fs-5">Conecta una cuenta Spotify Premium para encontrar los dispositivos disponibles en Spotify Connect.</p>
-        <details class="spotify-setup-guide">
-          <summary>Cómo obtener el Client ID de Spotify</summary>
-          <ol>
-            <li>En un computador o teléfono, abre <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener noreferrer">Spotify for Developers</a> e inicia sesión con tu cuenta Spotify Premium.</li>
-            <li>Presiona <strong>Create app</strong>, escribe un nombre y una descripción, y selecciona <strong>Web API</strong> entre las APIs que utilizará.</li>
-            <li>En la aplicación creada, abre <strong>Settings</strong> y agrega como Redirect URI exactamente la dirección que aparece debajo en esta pantalla.</li>
-            <li>Guarda los cambios, vuelve a la página principal de la aplicación y copia su <strong>Client ID</strong>. No copies ni compartas el Client Secret.</li>
-            <li>Pega el Client ID aquí, presiona <strong>Guardar</strong> y después <strong>Conectar Spotify</strong>.</li>
-          </ol>
-          <p>En Development Mode, Spotify limita cada aplicación a cinco usuarios autorizados. Los usuarios adicionales deben agregarse desde <strong>Settings → Users Management</strong>.</p>
-        </details>
-        <form id="spotify-connect-form" class="destination-form">
-          <label>Client ID de Spotify<input id="spotify-client-id" class="assistant-name-input" maxlength="200" placeholder="Client ID de developer.spotify.com"></label>
-          <label>Redirect URI<input id="spotify-redirect-uri" class="assistant-name-input" readonly></label>
-          <small class="text-secondary">Registra exactamente esta Redirect URI en tu aplicación de Spotify. No se necesita Client Secret.</small>
-          <div class="location-actions"><button class="save-button secondary" type="submit">Guardar</button><button id="spotify-authorize" class="save-button" type="button">Conectar Spotify</button></div>
-        </form>
-        <div class="destination-actions mt-3"><button id="discover-music-destinations" class="save-button" type="button">Buscar dispositivos</button></div>
-        <p class="destination-detail mt-3">Spotify sólo informa equipos disponibles recientemente para la cuenta conectada. Si un equipo aparece en el teléfono pero no aquí, selecciónalo desde <strong>Conectar a un dispositivo</strong>, inicia una reproducción en ese equipo y, mientras continúa reproduciendo, vuelve a buscar desde esta pantalla.</p>
-        <div id="spotify-connect-status" class="status-message mt-3" role="status"></div>
-        <div id="spotify-devices-list" class="destination-list"></div>
+      <section id="music-sources-screen" class="screen">
+        <header class="screen-header"><button class="back-button" data-screen="settings-screen">‹</button><div><div class="eyebrow">Música</div><h1>Orígenes</h1></div></header>
+        <p class="text-secondary fs-5">Servicios y bibliotecas configurados en Music Assistant. El origen seleccionado se usará por defecto en las próximas solicitudes.</p>
+        <div id="music-sources-summary" class="destination-detail"></div>
+        <div id="music-sources-status" class="status-message" role="status"></div>
+        <div id="music-sources-list" class="destination-list"></div>
       </section>
 
       <section id="music-destination-screen" class="screen">
@@ -146,7 +153,6 @@
         <form id="music-destination-form" class="destination-form">
           <label>Nombre para el asistente<input id="music-destination-alias" class="assistant-name-input" maxlength="80" placeholder="Ej: Equipo principal"></label>
           <label>Habitación<input id="music-destination-room" class="assistant-name-input" maxlength="80" placeholder="Ej: Living"></label>
-          <label>Ruta de reproducción<select id="music-destination-route" class="assistant-name-input"></select></label>
           <label class="switch-row"><span><strong>Destino habilitado</strong><small>Permite que el asistente lo seleccione.</small></span><input id="music-destination-enabled" type="checkbox" role="switch"></label>
           <button id="music-destination-active" class="save-button secondary" type="button">Usar como destino activo</button>
           <button class="save-button" type="submit">Guardar destino</button>

@@ -1,14 +1,15 @@
 export class MusicGatewayClient {
-  constructor({ baseUrl = "http://localhost:3100", fetchImpl = fetch }) {
+  constructor({ baseUrl = "http://localhost:3100", fetchImpl = fetch, timeoutMs = 90_000 }) {
     this.baseUrl = baseUrl.replace(/\/$/, "");
     this.fetch = fetchImpl;
+    this.timeoutMs = timeoutMs;
   }
 
   async request(path, options = {}) {
     const response = await this.fetch(`${this.baseUrl}${path}`, {
       ...options,
       headers: { ...(options.body ? { "Content-Type": "application/json" } : {}), ...options.headers },
-      signal: AbortSignal.timeout(15_000)
+      signal: AbortSignal.timeout(this.timeoutMs)
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.message || `Music Gateway respondió HTTP ${response.status}`);
@@ -16,6 +17,8 @@ export class MusicGatewayClient {
   }
 
   getDestinations() { return this.request("/v1/destinations"); }
+  getSources() { return this.request("/v1/sources"); }
+  setActiveSource(query) { return this.request("/v1/sources/active", { method: "PUT", body: JSON.stringify({ query }) }); }
   setActiveDestination(query) { return this.request("/v1/destinations/active", { method: "PUT", body: JSON.stringify({ query }) }); }
   play(command) { return this.request("/v1/music/play", { method: "POST", body: JSON.stringify(command) }); }
   pause(destination) { return this.request("/v1/music/pause", { method: "POST", body: JSON.stringify({ destination }) }); }

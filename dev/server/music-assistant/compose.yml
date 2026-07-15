@@ -1,0 +1,10 @@
+services:
+  music-assistant:
+    image: ghcr.io/music-assistant/server:latest
+    container_name: ha-music-assistant
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./data:/data
+    environment:
+      LOG_LEVEL: ${MUSIC_ASSISTANT_LOG_LEVEL:-info}

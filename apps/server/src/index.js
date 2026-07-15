@@ -45,6 +45,8 @@ import { createTransferMusicPlaybackTool } from "./tools/music/transfer-playback
 import { createGetMusicQueueTool } from "./tools/music/get-queue.tool.js";
 import { createGetCurrentMusicCreditsTool } from "./tools/music/get-current-credits.tool.js";
 import { createClearMusicQueueTool } from "./tools/music/clear-queue.tool.js";
+import { createListMusicSourcesTool } from "./tools/music/list-sources.tool.js";
+import { createSetActiveMusicSourceTool } from "./tools/music/set-active-source.tool.js";
 import { readOrCreateServerIdentity } from "./discovery/server-identity.js";
 import { ServerAdvertiser } from "./discovery/server-advertiser.js";
 
@@ -93,8 +95,13 @@ tools.push(createSetAlarmTool({ scheduler: alarmScheduler }));
 tools.push(createListAlarmsTool({ scheduler: alarmScheduler }));
 tools.push(createCancelAlarmTool({ scheduler: alarmScheduler }));
 tools.push(createGetAlarmRemainingTool({ scheduler: alarmScheduler }));
-const musicGateway = new MusicGatewayClient({ baseUrl: env("MUSIC_GATEWAY_URL", "http://localhost:3100") });
+const musicGateway = new MusicGatewayClient({
+  baseUrl: env("MUSIC_GATEWAY_URL", "http://localhost:3100"),
+  timeoutMs: Number(env("MUSIC_GATEWAY_TIMEOUT_MS", "90000"))
+});
 tools.push(createListMusicDestinationsTool({ music: musicGateway }));
+tools.push(createListMusicSourcesTool({ music: musicGateway }));
+tools.push(createSetActiveMusicSourceTool({ music: musicGateway }));
 tools.push(createSetActiveMusicDestinationTool({ music: musicGateway }));
 tools.push(createPlayMusicTool({ music: musicGateway }));
 tools.push(createPauseMusicTool({ music: musicGateway }));
@@ -311,6 +318,21 @@ websocket.on("connection", (socket, request) => {
 
 const weatherRefresh = setInterval(() => void publishWeatherUpdate(), 15 * 60_000);
 weatherRefresh.unref();
+let lastPlaybackSnapshot = "";
+const playbackRefresh = setInterval(async () => {
+  try {
+    const playback = await musicGateway.getPlayback();
+    const snapshot = JSON.stringify(playback);
+    if (snapshot !== lastPlaybackSnapshot) {
+      lastPlaybackSnapshot = snapshot;
+      broadcast(createEvent(EventType.PLAYBACK_CHANGED, playback, "music-assistant"));
+    }
+  } catch (error) {
+    if (lastPlaybackSnapshot !== "unavailable") jsonLog("warn", "Music Assistant no está disponible para actualizar el display", { error: error.message });
+    lastPlaybackSnapshot = "unavailable";
+  }
+}, 3_000);
+playbackRefresh.unref();
 server.listen(port, "0.0.0.0", () => {
   jsonLog("info", "Servidor iniciado", { port, server: serverIdentity, ...serverConfig });
   serverAdvertiser.start();

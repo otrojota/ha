@@ -15,6 +15,7 @@ import {
 } from "./config/assistant-config.js";
 import { ServerDiscovery } from "./discovery/server-discovery.js";
 import { ServerSelection, serverFromManualUrl } from "./discovery/server-selection.js";
+import { SendspinPlayer } from "./music/sendspin-player.js";
 
 const configuredServerUrl = process.env.SERVER_URL?.trim() || null;
 const configuredSpeechToTextUrl = process.env.SPEECH_TO_TEXT_URL?.trim() || null;
@@ -23,9 +24,16 @@ const audioApiPort = Number(env("AUDIO_API_PORT", "3200"));
 const audioConfigPath = env("AUDIO_CONFIG_PATH", "dev/satellite/config/audio.json");
 const assistantConfigPath = env("ASSISTANT_CONFIG_PATH", "dev/satellite/config/assistant.json");
 const satelliteServerConfigPath = env("SERVER_CONFIG_PATH", "dev/satellite/config/server.json");
-const defaultAudioConfig = { inputDeviceId: null, inputChannel: null, outputDeviceId: null, ttsVoiceId: null };
+const defaultAudioConfig = { inputDeviceId: null, inputDeviceIds: [], inputDeviceNames: {}, inputChannel: 0, inputChannelsByDevice: {}, outputDeviceId: null, outputDeviceIds: [], outputDeviceNames: {}, ttsVoiceId: null, musicPlayerEnabled: true, musicPlayerName: `Satélite ${satellite.room}`, musicOutputDeviceId: null };
 const audioDeviceProvider = createAudioDeviceProvider();
 const textToSpeechProvider = createTextToSpeechProvider(jsonLog);
+const sendspinPlayer = new SendspinPlayer({
+  executable: env("SENDSPIN_EXECUTABLE", "sendspin"),
+  satelliteId: satellite.id,
+  room: satellite.room,
+  serverUrl: env("MUSIC_ASSISTANT_SENDSPIN_URL", ""),
+  log: jsonLog
+});
 const wakeWordProvider = env("WAKE_WORD_PROVIDER", "vosk");
 const commandWindowMs = Number(env("WAKE_WORD_COMMAND_TIMEOUT_MS", "7000"));
 const wakeWordMinConfidence = Number(env("WAKE_WORD_MIN_CONFIDENCE", "0.82"));
@@ -105,11 +113,33 @@ if (wakeWordProvider === "vosk") {
 
 async function readAudioConfig() {
   try {
-    return { ...defaultAudioConfig, ...JSON.parse(await readFile(audioConfigPath, "utf8")) };
+    const config = { ...defaultAudioConfig, ...JSON.parse(await readFile(audioConfigPath, "utf8")) };
+    config.inputDeviceIds = [...new Set([...(config.inputDeviceIds || []), config.inputDeviceId].filter(Boolean))];
+    config.outputDeviceIds = [...new Set([...(config.outputDeviceIds || []), config.outputDeviceId].filter(Boolean))];
+    config.inputChannelsByDevice = { ...(config.inputChannelsByDevice || {}) };
+    config.inputDeviceNames = { ...(config.inputDeviceNames || {}) };
+    config.outputDeviceNames = { ...(config.outputDeviceNames || {}) };
+    if (config.inputDeviceId && Number.isInteger(config.inputChannel) && config.inputChannelsByDevice[config.inputDeviceId] === undefined) config.inputChannelsByDevice[config.inputDeviceId] = config.inputChannel;
+    return config;
   } catch (error) {
     if (error.code !== "ENOENT") jsonLog("warn", "No se pudo leer la configuración de audio", { error: error.message });
     return { ...defaultAudioConfig };
   }
+}
+
+async function resolvedAudioConfig(config, devices) {
+  config ||= await readAudioConfig();
+  const listed = devices || await listAudioDevices(audioDeviceProvider, (kind, error) => jsonLog("warn", "No se pudieron resolver dispositivos de audio", { kind, error: error.message }));
+  const resolve = (ids, names, available) => {
+    for (const preferenceId of ids) {
+      const device = available.find((item) => item.available !== false && (item.id === preferenceId || (names[preferenceId] && item.name === names[preferenceId])));
+      if (device) return { deviceId: device.id, preferenceId };
+    }
+    return { deviceId: null, preferenceId: null };
+  };
+  const input = resolve(config.inputDeviceIds, config.inputDeviceNames, listed.input);
+  const output = resolve(config.outputDeviceIds, config.outputDeviceNames, listed.output);
+  return { ...config, inputDeviceId: input.deviceId, outputDeviceId: output.deviceId, inputChannel: input.preferenceId ? (config.inputChannelsByDevice[input.preferenceId] ?? 0) : (config.inputChannel ?? 0) };
 }
 
 async function writeAudioConfig(config) {
@@ -191,12 +221,15 @@ async function handleAudioApi(request, response) {
         return [];
       })
     ]);
+    const effectiveConfig = await resolvedAudioConfig(config, devices);
     return sendJson(response, 200, {
-      config,
+      config: { ...config, inputDeviceId: config.inputDeviceIds[0] || null, outputDeviceId: config.outputDeviceIds[0] || null },
+      effectiveConfig,
       devices: { input: devices.input, output: devices.output },
       voices,
       provider: devices.provider,
-      ttsProvider: textToSpeechProvider.name
+      ttsProvider: textToSpeechProvider.name,
+      musicPlayer: sendspinPlayer.status(config)
     });
   }
 
@@ -215,10 +248,21 @@ async function handleAudioApi(request, response) {
     try {
       const update = await readJsonBody(request);
       const config = await readAudioConfig();
+      const currentDevices = await listAudioDevices(audioDeviceProvider, () => {});
       const previousInputDeviceId = config.inputDeviceId;
-      for (const key of ["inputDeviceId", "outputDeviceId"]) {
+      for (const key of ["musicOutputDeviceId"]) {
         if (key in update && update[key] !== null && typeof update[key] !== "string") throw new Error(`Valor inválido: ${key}`);
         if (key in update) config[key] = update[key];
+      }
+      for (const [key, listKey] of [["inputDeviceId", "inputDeviceIds"], ["outputDeviceId", "outputDeviceIds"]]) {
+        if (!(key in update)) continue;
+        if (update[key] !== null && typeof update[key] !== "string") throw new Error(`Valor inválido: ${key}`);
+        config[listKey] = update[key] ? [update[key], ...config[listKey].filter((id) => id !== update[key])] : [];
+        config[key] = update[key];
+        const kind = key === "inputDeviceId" ? "input" : "output";
+        const namesKey = key === "inputDeviceId" ? "inputDeviceNames" : "outputDeviceNames";
+        const selected = currentDevices[kind].find((device) => device.id === update[key]);
+        if (selected) config[namesKey][update[key]] = selected.name;
       }
       if ("inputChannel" in update && update.inputChannel !== null && (!Number.isInteger(update.inputChannel) || update.inputChannel < 0)) {
         throw new Error("Valor inválido: inputChannel");
@@ -229,16 +273,26 @@ async function handleAudioApi(request, response) {
         if (update.ttsVoiceId !== null && !voices.some((voice) => voice.id === update.ttsVoiceId)) throw new Error("La voz seleccionada no está disponible");
         config.ttsVoiceId = update.ttsVoiceId;
       }
-      if ("inputDeviceId" in update && update.inputDeviceId !== previousInputDeviceId) config.inputChannel = null;
+      if ("inputDeviceId" in update && update.inputDeviceId !== previousInputDeviceId) config.inputChannel = config.inputChannelsByDevice[update.inputDeviceId] ?? null;
       if (Number.isInteger(update.inputChannel)) {
         if (!config.inputDeviceId) throw new Error("Selecciona primero un dispositivo de entrada");
         const channels = await audioDeviceProvider.listInputChannels(config.inputDeviceId);
         if (!channels.some((channel) => channel.id === update.inputChannel)) throw new Error("El canal no existe en el dispositivo seleccionado");
       }
-      if ("inputChannel" in update) config.inputChannel = update.inputChannel;
+      if ("inputChannel" in update) {
+        config.inputChannel = update.inputChannel;
+        if (config.inputDeviceId) config.inputChannelsByDevice[config.inputDeviceId] = update.inputChannel;
+      }
+      if ("musicPlayerEnabled" in update) config.musicPlayerEnabled = Boolean(update.musicPlayerEnabled);
+      if ("musicPlayerName" in update) {
+        config.musicPlayerName = String(update.musicPlayerName || "").trim().slice(0, 80);
+        if (!config.musicPlayerName) throw new Error("El reproductor musical necesita un nombre");
+      }
+      if (config.musicPlayerEnabled !== false && !String(config.musicPlayerName || "").trim()) throw new Error("El reproductor musical necesita un nombre antes de habilitarse");
       await writeAudioConfig(config);
+      if (["musicPlayerEnabled", "musicPlayerName", "musicOutputDeviceId"].some((key) => key in update)) await sendspinPlayer.start(config);
       jsonLog("info", "Configuración de audio actualizada", config);
-      return sendJson(response, 200, { config });
+      return sendJson(response, 200, { config: { ...config, inputDeviceId: config.inputDeviceIds[0] || null, outputDeviceId: config.outputDeviceIds[0] || null }, effectiveConfig: await resolvedAudioConfig(config, currentDevices) });
     } catch (error) {
       return sendJson(response, 400, { error: "invalid_audio_config", message: error.message });
     }
@@ -255,7 +309,7 @@ createServer((request, response) => {
 }).listen(audioApiPort, "0.0.0.0", () => jsonLog("info", "API local de audio iniciada", { port: audioApiPort }));
 
 voiceCapture = new VoiceCapture({
-  readConfig: readAudioConfig,
+  readConfig: resolvedAudioConfig,
   log: jsonLog,
   silenceDuration: Number(env("VOICE_SILENCE_DURATION_MS", "800")) / 1000,
   maxPhraseSeconds: Number(env("VOICE_MAX_PHRASE_SECONDS", "8")),
@@ -319,7 +373,7 @@ function openFollowUpWindow(timeoutMs) {
 function enqueueSpeech(text, { expectsReply = false, followUpTimeoutMs = 5000 } = {}) {
   speechQueue = speechQueue.then(async () => {
     activationExpiresAt = 0;
-    const config = await readAudioConfig();
+    const config = await resolvedAudioConfig();
     if (!config.outputDeviceId) {
       jsonLog("info", "Respuesta TTS omitida: no hay salida configurada");
       if (expectsReply) openFollowUpWindow(followUpTimeoutMs);
@@ -341,6 +395,7 @@ function enqueueSpeech(text, { expectsReply = false, followUpTimeoutMs = 5000 } 
 }
 
 voiceCapture.start();
+await sendspinPlayer.start(await readAudioConfig()).catch((error) => jsonLog("warn", "El parlante Sendspin no pudo iniciarse automáticamente", { error: error.message }));
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.once(signal, () => {
     clearTimeout(reconnectTimer);
@@ -348,6 +403,7 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
     activeSocket?.close();
     voiceCapture.stop();
     wakeWordDetector?.stop();
+    sendspinPlayer.stop();
     setTimeout(() => process.exit(0), 250);
   });
 }

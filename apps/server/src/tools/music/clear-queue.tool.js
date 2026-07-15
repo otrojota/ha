@@ -2,7 +2,7 @@ export function createClearMusicQueueTool({ music }) {
   return {
     definition: { type: "function", function: {
       name: "music_clear_queue",
-      description: "Elimina las canciones visibles de la cola actual de Spotify y restaura la canción y posición actuales.",
+      description: "Vacía la cola actual administrada por Music Assistant.",
       parameters: { type: "object", properties: {}, additionalProperties: false }
     } },
     async execute(args) {

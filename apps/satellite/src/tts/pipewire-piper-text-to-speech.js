@@ -44,7 +44,7 @@ export class PipeWirePiperTextToSpeech extends TextToSpeechProvider {
     const outputPath = join(tmpdir(), `ha-tts-${randomUUID()}.wav`);
     try {
       await run(this.executable, ["--model", model, "--output_file", outputPath], `${text}\n`);
-      await run("pw-play", ["--target", outputDeviceId, outputPath]);
+      await run("pw-play", [...(outputDeviceId ? ["--target", outputDeviceId] : []), outputPath]);
     } finally {
       await unlink(outputPath).catch(() => {});
     }

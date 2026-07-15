@@ -67,7 +67,7 @@ La Raspberry NO ejecutará modelos LLM grandes.
 - Captura de audio
 - PipeWire
 - TTS Player
-- Spotify Connect local (librespot)
+- Reproductor Music Assistant local mediante Sendspin
 - UI
 - Bluetooth
 - Comunicación con backend
@@ -112,24 +112,13 @@ Music Assistant será responsable de integrar:
 - Biblioteca local
 - Otros proveedores futuros
 
-No acoplar el código a Music Assistant.
+No acoplar las tools ni el agente directamente a Music Assistant; el acoplamiento queda encapsulado en MusicGateway.
 
 ---
 
-# Spotify
+# Destinos Music Assistant
 
-La Raspberry debe aparecer como dispositivo Spotify Connect mediante:
-
-- librespot (o equivalente)
-
-El backend controla Spotify mediante API.
-
-Ejemplos:
-
-- "Conéctate al Spotify del living"
-- "Reproduce Spotify local"
-
-No transmitir audio directamente mediante Spotify Connect.
+La Raspberry aparece como reproductor de Music Assistant mediante el cliente oficial Sendspin en modo daemon. Music Assistant es la fuente única de orígenes, biblioteca, colas y destinos. No usar Spotify Connect ni librespot en el satélite.
 
 ---
 
@@ -208,9 +197,9 @@ Priorizar simplicidad, modularidad y posibilidad de crecer hacia múltiples Rasp
 
 ---
 
-# Estado implementado (14 de julio de 2026)
+# Estado implementado (15 de julio de 2026)
 
-FenixIA no forma parte de este proyecto. El foco actual es voz, música y radio, noticias/búsqueda web y futura integración con Home Assistant.
+FenixIA no forma parte de este proyecto. El foco actual es voz, música y radio mediante Music Assistant, noticias/búsqueda web y futura integración con Home Assistant.
 
 ## Ejecución de desarrollo
 
@@ -224,7 +213,10 @@ Los `docker-compose.yml` generales de `dev/server` y `dev/satellite` fueron reem
 ```
 
 - `startServer.sh` valida Whisper/Ollama, reutiliza o inicia `ollama serve`, inicia SearXNG mediante Docker Compose y luego `apps/server`.
+- `startServer.sh` inicia también Music Assistant mediante Docker Compose con red host y espera su disponibilidad antes de Music Gateway.
+- Si Music Assistant requiere autenticación, el servidor continúa iniciándose. El display permite iniciar sesión una vez; Music Gateway crea y persiste un token de larga duración sin guardar la contraseña.
 - `stopServer.sh` detiene servidor, SearXNG y sólo la instancia de Ollama que haya iniciado el propio entorno.
+- `stopServer.sh` detiene también el contenedor de Music Assistant administrado por este entorno.
 - `startSatellite.sh` inicia `apps/satellite` y `apps/display` nativamente para conservar acceso a CoreAudio/PipeWire.
 - Puertos predeterminados: servidor `3000`, API local del satélite `3200`, display `8080`, SearXNG local `8888`.
 - Logs: `dev/server/server.log`, `dev/server/ollama.log`, `dev/satellite/satellite.log` y `dev/satellite/display.log`.
@@ -273,13 +265,19 @@ Formato:
 ```json
 {
   "inputDeviceId": null,
+  "inputDeviceIds": [],
+  "inputDeviceNames": {},
   "inputChannel": null,
+  "inputChannelsByDevice": {},
   "outputDeviceId": null,
+  "outputDeviceIds": [],
+  "outputDeviceNames": {},
   "ttsVoiceId": null
 }
 ```
 
 `inputChannel` es base cero internamente y base uno en la GUI. La selección de salida TTS no modifica la ruta de música.
+Las listas `inputDeviceIds` y `outputDeviceIds` están ordenadas por prioridad. Cada nueva selección pasa al primer lugar y las anteriores quedan como fallback automático. Los nombres permiten reencontrar dispositivos CoreAudio aunque macOS cambie sus índices; el canal de entrada se conserva por dispositivo.
 
 Proveedores bajo `apps/satellite/src/audio`:
 

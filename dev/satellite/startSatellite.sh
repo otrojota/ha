@@ -12,6 +12,49 @@ set -a
 . "$SCRIPT_DIR/.env"
 set +a
 
+ensure_sendspin() {
+  CONFIGURED=${SENDSPIN_EXECUTABLE:-sendspin}
+  if command -v "$CONFIGURED" >/dev/null 2>&1; then
+    SENDSPIN_EXECUTABLE=$(command -v "$CONFIGURED")
+    export SENDSPIN_EXECUTABLE
+    return
+  fi
+  if [ "$CONFIGURED" != "sendspin" ]; then
+    echo "No se encontró SENDSPIN_EXECUTABLE=$CONFIGURED. Corrige la ruta o usa SENDSPIN_EXECUTABLE=sendspin para instalarlo automáticamente."
+    exit 1
+  fi
+
+  TOOLS_BIN="$SCRIPT_DIR/.tools/bin"
+  SENDSPIN_LOCAL="$TOOLS_BIN/sendspin"
+  if [ ! -x "$SENDSPIN_LOCAL" ]; then
+    mkdir -p "$TOOLS_BIN"
+    if command -v uv >/dev/null 2>&1; then
+      UV=$(command -v uv)
+    elif [ -x "$TOOLS_BIN/uv" ]; then
+      UV="$TOOLS_BIN/uv"
+    else
+      if ! command -v curl >/dev/null 2>&1; then
+        echo "Se necesita curl para instalar uv y Sendspin automáticamente."
+        exit 1
+      fi
+      echo "uv no está instalado; instalando una copia local…"
+      UV_INSTALL_DIR="$TOOLS_BIN" UV_NO_MODIFY_PATH=1 sh -c "$(curl -LsSf https://astral.sh/uv/install.sh)"
+      UV="$TOOLS_BIN/uv"
+    fi
+    echo "Sendspin no está instalado; instalando una copia local con Python 3.12…"
+    UV_TOOL_BIN_DIR="$TOOLS_BIN" "$UV" tool install --python 3.12 sendspin
+  fi
+  if [ ! -x "$SENDSPIN_LOCAL" ]; then
+    echo "La instalación terminó, pero no se encontró $SENDSPIN_LOCAL."
+    exit 1
+  fi
+  SENDSPIN_EXECUTABLE="$SENDSPIN_LOCAL"
+  export SENDSPIN_EXECUTABLE
+  echo "Sendspin disponible en $SENDSPIN_EXECUTABLE"
+}
+
+ensure_sendspin
+
 if [ "${WAKE_WORD_PROVIDER:-vosk}" = "vosk" ]; then
   cd "$REPO_ROOT"
   if [ ! -x "${VOSK_PYTHON:-dev/satellite/.venv/bin/python}" ]; then

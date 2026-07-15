@@ -4,7 +4,7 @@ export function createListMusicDestinationsTool({ music }) {
       type: "function",
       function: {
         name: "music_list_destinations",
-        description: "Lista los destinos de música que el usuario agregó e indica cuál está activo. Úsala si necesitas conocer nombres disponibles o el destino actual.",
+        description: "Lista todos los reproductores habilitados que Music Assistant expone como destinos e indica cuál está activo.",
         parameters: { type: "object", properties: {}, additionalProperties: false }
       }
     },
@@ -14,7 +14,7 @@ export function createListMusicDestinationsTool({ music }) {
       return {
         activeDestinationId: state.activeDestinationId,
         destinations: state.destinations.filter((item) => item.enabled !== false).map((item) => ({
-          id: item.id, name: item.name, alias: item.alias, room: item.room, active: item.active, available: item.available, source: item.source
+          id: item.id, name: item.name, alias: item.alias, room: item.room, active: item.active, available: item.available, provider: item.provider
         }))
       };
     }

@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "node --watch src/index.js",
     "start": "node src/index.js",
-    "check": "node --check src/index.js",
+    "check": "node --check src/index.js && node --check src/music/sendspin-player.js",
     "test": "node --test"
   },
   "dependencies": {

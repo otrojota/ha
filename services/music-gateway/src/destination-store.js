@@ -1,207 +1,134 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
-const defaultState = Object.freeze({
-  integrations: {
-    spotify: {
-      clientId: "",
-      redirectUri: "http://127.0.0.1:3100/v1/integrations/spotify/callback",
-      accessToken: "",
-      refreshToken: "",
-      expiresAt: 0,
-      scope: ""
+function normalized(value) {
+  return String(value || "").normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()
+    .replace(/\b(uno|una)\b/g, "1").replace(/\b(dos)\b/g, "2").replace(/\b(tres)\b/g, "3")
+    .replace(/\b(cuatro)\b/g, "4").replace(/\b(cinco)\b/g, "5").replace(/\b(seis)\b/g, "6")
+    .replace(/\b(siete)\b/g, "7").replace(/\b(ocho)\b/g, "8").replace(/\b(nueve)\b/g, "9");
+}
+
+function compact(value) { return normalized(value).replace(/\s/g, ""); }
+
+function phonetic(value) {
+  return compact(value)
+    .replace(/^h/, "").replace(/h/g, "")
+    .replace(/[bv]/g, "v").replace(/ll|y/g, "y")
+    .replace(/[sz]/g, "s").replace(/ce|ci/g, "se").replace(/c/g, "k")
+    .replace(/qu/g, "k").replace(/ge|gi|j/g, "j").replace(/gue/g, "ge").replace(/gui/g, "gi");
+}
+
+function editDistance(left, right) {
+  const previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let row = 1; row <= left.length; row += 1) {
+    const current = [row];
+    for (let column = 1; column <= right.length; column += 1) {
+      current[column] = Math.min(
+        current[column - 1] + 1,
+        previous[column] + 1,
+        previous[column - 1] + (left[row - 1] === right[column - 1] ? 0 : 1)
+      );
     }
-  },
-  activeDestinationId: null,
-  destinations: []
-});
-
-function cleanText(value, maxLength = 100) {
-  return String(value ?? "").trim().slice(0, maxLength);
+    previous.splice(0, previous.length, ...current);
+  }
+  return previous[right.length];
 }
 
-function normalizedDestinationLabel(value) {
-  return String(value || "")
-    .normalize("NFD").replace(/\p{Diacritic}/gu, "")
-    .toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " ");
+function similarity(left, right) {
+  if (!left || !right) return 0;
+  return 1 - editDistance(left, right) / Math.max(left.length, right.length);
 }
 
-export function publicIntegrationConfig(config) {
-  return {
-    clientId: config.clientId || "",
-    redirectUri: config.redirectUri,
-    connected: Boolean(config.refreshToken || config.accessToken)
-  };
+function fuzzyMatches(items, query, labelsFor) {
+  const wanted = compact(query);
+  const wantedPhonetic = phonetic(query);
+  return items.map((item) => ({
+    item,
+    score: Math.max(...labelsFor(item).filter(Boolean).map((label) => Math.max(
+      similarity(wanted, compact(label)),
+      similarity(wantedPhonetic, phonetic(label))
+    )), 0)
+  })).sort((left, right) => right.score - left.score);
+}
+
+function resolveByLabels(items, query, labelsFor, kind) {
+  const wanted = compact(query);
+  const direct = items.filter((item) => labelsFor(item).filter(Boolean).some((label) => {
+    const value = compact(label);
+    return value === wanted || value.includes(wanted) || wanted.includes(value);
+  }));
+  if (direct.length === 1) return direct[0];
+  if (direct.length > 1) throw new Error(`El ${kind} “${query}” es ambiguo: ${direct.map((item) => labelsFor(item).find(Boolean)).join(", ")}`);
+  const ranked = fuzzyMatches(items, query, labelsFor);
+  if (!ranked.length || ranked[0].score < 0.68) return null;
+  if (ranked[1] && ranked[0].score - ranked[1].score < 0.08) {
+    throw new Error(`El ${kind} “${query}” es ambiguo: ${ranked.slice(0, 3).map(({ item }) => labelsFor(item).find(Boolean)).join(", ")}`);
+  }
+  return ranked[0].item;
 }
 
 export class DestinationStore {
-  constructor(path) {
-    this.path = path;
-    this.state = structuredClone(defaultState);
-  }
-
+  constructor(path) { this.path = path; this.state = { activeDestinationId: null, activeSourceId: null, preferences: {} }; }
   async load() {
     try {
       const saved = JSON.parse(await readFile(this.path, "utf8"));
-      this.state = {
-        integrations: {
-          spotify: { ...defaultState.integrations.spotify, ...saved.integrations?.spotify }
-        },
-        activeDestinationId: saved.activeDestinationId || null,
-        destinations: Array.isArray(saved.destinations)
-          ? saved.destinations.filter((item) => !["music-assistant", "simulator"].includes(item.source))
-          : []
-      };
-    } catch (error) {
-      if (error.code !== "ENOENT") throw error;
-    }
-    if (!this.state.destinations.some((item) => item.id === this.state.activeDestinationId && item.enabled !== false)) {
-      this.state.activeDestinationId = this.state.destinations.find((item) => item.enabled !== false)?.id || null;
-    }
-    return this.state;
+      this.state.activeDestinationId = saved.activeDestinationId || null;
+      this.state.activeSourceId = saved.activeSourceId || null;
+      this.state.preferences = saved.preferences || {};
+    } catch (error) { if (error.code !== "ENOENT") throw error; }
   }
-
   async save() {
     await mkdir(dirname(this.path), { recursive: true });
-    const temporaryPath = `${this.path}.tmp`;
-    await writeFile(temporaryPath, `${JSON.stringify(this.state, null, 2)}\n`);
-    await rename(temporaryPath, this.path);
+    const temporary = `${this.path}.tmp`;
+    await writeFile(temporary, `${JSON.stringify(this.state, null, 2)}\n`);
+    await rename(temporary, this.path);
   }
-
-  getSpotifyIntegration() {
-    return this.state.integrations.spotify;
+  decorate(players) {
+    return players.map((player) => ({ ...player, ...(this.state.preferences[player.id] || {}), active: player.id === this.state.activeDestinationId }));
   }
-
-  async updateSpotifyIntegration(update) {
-    const current = this.getSpotifyIntegration();
-    const redirectUri = cleanText(update.redirectUri ?? current.redirectUri, 500);
-    if (!/^https:\/\//.test(redirectUri) && !/^http:\/\/(127\.0\.0\.1|\[::1\])(?::\d+)?\//.test(redirectUri)) {
-      throw new Error("Spotify exige HTTPS o una dirección loopback explícita como 127.0.0.1");
-    }
-    this.state.integrations.spotify = {
-      ...current,
-      clientId: cleanText(update.clientId ?? current.clientId, 200),
-      redirectUri,
-      accessToken: update.accessToken ?? current.accessToken,
-      refreshToken: update.refreshToken ?? current.refreshToken,
-      expiresAt: update.expiresAt ?? current.expiresAt,
-      scope: update.scope ?? current.scope
+  resolve(players, query) {
+    const decorated = this.decorate(players).filter((player) => player.enabled !== false);
+    if (!query) return decorated.find((player) => player.active) || decorated.find((player) => player.available) || decorated[0] || null;
+    const exactId = decorated.find((player) => String(player.id) === String(query));
+    if (exactId) return exactId;
+    const match = resolveByLabels(decorated, query, (player) => [player.alias, player.room, player.name], "destino");
+    if (!match) throw new Error(`No existe un destino de Music Assistant que coincida con “${query}”`);
+    return match;
+  }
+  async setActive(players, query) {
+    const player = this.resolve(players, query);
+    if (!player) throw new Error("Music Assistant no tiene destinos habilitados");
+    if (!player.available) throw new Error(`El destino ${player.alias || player.name} no está disponible`);
+    this.state.activeDestinationId = player.id;
+    await this.save();
+    return { ...player, active: true };
+  }
+  resolveSource(sources, query) {
+    const available = sources.filter((source) => source.available !== false);
+    if (!query) return available.find((source) => source.id === this.state.activeSourceId) || available.find((source) => source.streaming) || available[0] || null;
+    const exact = available.find((source) => String(source.id) === String(query));
+    if (exact) return exact;
+    const match = resolveByLabels(available, query, (source) => [source.name, source.domain], "origen");
+    if (!match) throw new Error(`No existe un origen disponible en Music Assistant que coincida con “${query}”`);
+    return match;
+  }
+  async setActiveSource(sources, query) {
+    const source = this.resolveSource(sources, query);
+    if (!source) throw new Error("Music Assistant no tiene orígenes disponibles");
+    this.state.activeSourceId = source.id;
+    await this.save();
+    return { ...source, active: true };
+  }
+  async update(players, id, update) {
+    if (!players.some((player) => player.id === id)) throw new Error("Destino no encontrado en Music Assistant");
+    this.state.preferences[id] = {
+      ...(this.state.preferences[id] || {}),
+      alias: String(update.alias ?? this.state.preferences[id]?.alias ?? "").trim().slice(0, 80),
+      room: String(update.room ?? this.state.preferences[id]?.room ?? "").trim().slice(0, 80),
+      enabled: update.enabled === undefined ? this.state.preferences[id]?.enabled !== false : Boolean(update.enabled)
     };
-    if (update.disconnect) Object.assign(this.state.integrations.spotify, { accessToken: "", refreshToken: "", expiresAt: 0, scope: "" });
+    if (this.state.preferences[id].enabled === false && this.state.activeDestinationId === id) this.state.activeDestinationId = null;
     await this.save();
-    return this.getSpotifyIntegration();
-  }
-
-  listDestinations() {
-    return this.state.destinations.map((item) => ({ ...item, active: item.id === this.state.activeDestinationId }));
-  }
-
-  getActiveDestination() {
-    return this.listDestinations().find((item) => item.active) || null;
-  }
-
-  resolveDestination(query) {
-    if (!query) return this.getActiveDestination();
-    const normalized = normalizedDestinationLabel(query);
-    const compact = normalized.replace(/\s/g, "");
-    const enabled = this.listDestinations().filter((item) => item.enabled !== false);
-    const labels = (item) => [item.alias, item.name, item.room].filter(Boolean).map(normalizedDestinationLabel);
-    const exact = enabled.filter((item) => labels(item).some((label) => label === normalized || label.replace(/\s/g, "") === compact));
-    const matches = exact.length ? exact : enabled.filter((item) => labels(item).some((label) => {
-      const compactLabel = label.replace(/\s/g, "");
-      return label.includes(normalized) || normalized.includes(label) || compactLabel.includes(compact) || compact.includes(compactLabel);
-    }));
-    if (!matches.length) throw new Error(`No existe un destino agregado que coincida con “${query}”`);
-    if (matches.length > 1) throw new Error(`El destino “${query}” es ambiguo: ${matches.map((item) => item.alias || item.name).join(", ")}`);
-    return matches[0];
-  }
-
-  async setActiveDestination(idOrQuery) {
-    const destination = this.state.destinations.find((item) => item.id === idOrQuery)
-      || this.resolveDestination(idOrQuery);
-    if (!destination) throw new Error("No hay destinos de música agregados");
-    if (destination.enabled === false) throw new Error("El destino está deshabilitado");
-    this.state.activeDestinationId = destination.id;
-    await this.save();
-    return { ...destination, active: true };
-  }
-
-  async mergeDiscovered(discovered) {
-    const now = new Date().toISOString();
-    const foundIds = new Set(discovered.map((item) => item.id));
-    const existing = new Map(this.state.destinations.map((item) => [item.id, item]));
-
-    for (const item of discovered) {
-      const saved = existing.get(item.id);
-      existing.set(item.id, {
-        ...saved,
-        ...item,
-        alias: saved?.alias || "",
-        room: saved?.room || "",
-        enabled: saved?.enabled ?? true,
-        preferredRouteId: saved?.preferredRouteId && item.routes.some((route) => route.id === saved.preferredRouteId)
-          ? saved.preferredRouteId
-          : item.routes.find((route) => route.available)?.id || item.routes[0]?.id || null,
-        lastSeenAt: now
-      });
-    }
-
-    this.state.destinations = [...existing.values()].map((item) => foundIds.has(item.id) ? item : { ...item, available: false });
-    await this.save();
-    return this.state.destinations;
-  }
-
-  async addDestination(discovered) {
-    if (!discovered?.id || !String(discovered.id).startsWith("spotify:")) throw new Error("Destino Spotify inválido");
-    const existing = this.state.destinations.find((item) => item.id === discovered.id);
-    const destination = {
-      ...existing,
-      ...discovered,
-      alias: existing?.alias || "",
-      room: existing?.room || "",
-      enabled: existing?.enabled ?? true,
-      preferredRouteId: existing?.preferredRouteId || discovered.routes?.[0]?.id || null,
-      lastSeenAt: new Date().toISOString()
-    };
-    if (existing) Object.assign(existing, destination);
-    else this.state.destinations.push(destination);
-    if (!this.state.activeDestinationId) this.state.activeDestinationId = destination.id;
-    await this.save();
-    return { ...destination, active: destination.id === this.state.activeDestinationId };
-  }
-
-  async updateSpotifyAvailability(discovered) {
-    const found = new Map(discovered.map((item) => [item.id, item]));
-    for (const destination of this.state.destinations) {
-      if (destination.source !== "spotify-connect") continue;
-      const current = found.get(destination.id);
-      destination.available = Boolean(current);
-      if (current) {
-        destination.name = current.name;
-        destination.model = current.model;
-        destination.restricted = current.restricted;
-        destination.routes = current.routes;
-        destination.lastSeenAt = new Date().toISOString();
-      }
-    }
-    await this.save();
-  }
-
-  async updateDestination(id, update) {
-    const destination = this.state.destinations.find((item) => item.id === id);
-    if (!destination) throw new Error("Destino no encontrado");
-    const preferredRouteId = update.preferredRouteId ?? destination.preferredRouteId;
-    if (preferredRouteId && !destination.routes.some((route) => route.id === preferredRouteId)) {
-      throw new Error("La ruta seleccionada no pertenece a este destino");
-    }
-    destination.alias = cleanText(update.alias ?? destination.alias, 80);
-    destination.room = cleanText(update.room ?? destination.room, 80);
-    destination.enabled = update.enabled === undefined ? destination.enabled : Boolean(update.enabled);
-    if (!destination.enabled && this.state.activeDestinationId === destination.id) {
-      this.state.activeDestinationId = this.state.destinations.find((item) => item.id !== destination.id && item.enabled !== false)?.id || null;
-    }
-    destination.preferredRouteId = preferredRouteId || null;
-    await this.save();
-    return { ...destination, active: destination.id === this.state.activeDestinationId };
+    return this.decorate(players).find((player) => player.id === id);
   }
 }

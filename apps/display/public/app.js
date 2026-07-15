@@ -1,7 +1,7 @@
 const elements = Object.fromEntries([
   "clock", "date", "connection", "weather", "weather-icon", "weather-condition", "moon-phase", "moon-icon", "moon-phase-name", "track", "device", "transcript", "response",
   "playback-cover", "playback-cover-placeholder", "playback-artists", "playback-album", "playback-progress-bar", "playback-time",
-  "playback-previous", "playback-toggle", "playback-next", "playback-controls-status",
+  "playback-volume", "playback-volume-value", "playback-previous", "playback-toggle", "playback-next", "playback-controls-status",
   "input-summary", "output-summary", "audio-title", "audio-help", "audio-status", "device-list",
   "channel-status", "channel-list", "audio-level-db", "audio-level-bar", "audio-level-peak",
   "assistant-summary", "assistant-form", "assistant-name", "assistant-status"
@@ -10,13 +10,20 @@ const elements = Object.fromEntries([
   "location-latitude", "location-longitude", "location-time-zone", "location-status", "detect-location"
   , "music-destinations-summary", "music-destinations-status", "music-destinations-list", "discover-music-destinations"
   , "music-destination-title", "music-destination-detail", "music-destination-form", "music-destination-alias"
-  , "music-destination-room", "music-destination-route", "music-destination-enabled", "music-destination-status"
+  , "music-destination-room", "music-destination-enabled", "music-destination-status"
+  , "music-sources-menu-summary", "music-sources-summary", "music-sources-status", "music-sources-list"
   , "music-destination-active"
-  , "spotify-connect-summary", "spotify-connect-form", "spotify-client-id", "spotify-redirect-uri"
-  , "spotify-authorize", "spotify-connect-status", "spotify-devices-list"
+  , "music-player-summary", "music-player-form", "music-player-name", "music-player-output", "music-player-output-list", "music-player-enabled", "music-player-status"
+  , "music-assistant-summary", "music-assistant-form", "music-assistant-username", "music-assistant-password", "music-assistant-status"
   , "server-summary", "server-status", "server-list", "discover-servers"
 ].map((id) => [id, document.getElementById(id)]));
 
+const playbackSource = document.createElement("div");
+playbackSource.id = "playback-source";
+playbackSource.className = "playback-device";
+playbackSource.textContent = "Origen: --";
+elements["playback-album"].after(playbackSource);
+elements["playback-source"] = playbackSource;
 const audioApiUrl = `${location.protocol}//${location.hostname || "localhost"}:3200/audio`;
 const assistantApiUrl = `${location.protocol}//${location.hostname || "localhost"}:3200/assistant`;
 const serverApiUrl = `${location.protocol}//${location.hostname || "localhost"}:3200`;
@@ -35,6 +42,9 @@ let peakAudioLevel = 0;
 let peakHoldUntil = 0;
 let playbackSnapshot = null;
 let playbackReceivedAt = 0;
+let playbackVolumeEditing = false;
+let lastNonEmptyPlaybackAt = 0;
+let playbackRequestGeneration = 0;
 
 function applyServerState(state) {
   serverState = state;
@@ -116,14 +126,40 @@ function updatePlaybackProgress() {
   elements["playback-time"].textContent = duration > 0 ? `${playbackTime(progress)} / ${playbackTime(duration)}` : "";
 }
 
+function playbackDestinationLabel(playback) {
+  const destinationId = playback.destination?.id || playback.device?.id;
+  const configured = musicState?.destinations?.find((item) => item.id === destinationId);
+  const destination = configured || playback.destination || {};
+  const alias = String(destination.alias || "").trim();
+  const room = String(destination.room || "").trim();
+  if (alias && room) return `${alias} · ${room}`;
+  return alias || room || destination.name || (typeof playback.device === "string" ? playback.device : playback.device?.name) || null;
+}
+
 function renderPlayback(playback = {}) {
+  const now = Date.now();
+  if (!playback.item && playbackSnapshot?.item && now - lastNonEmptyPlaybackAt < 15_000) {
+    playback = {
+      ...playback,
+      item: playbackSnapshot.item,
+      status: playback.status === "idle" ? playbackSnapshot.status : playback.status,
+      progressMs: playbackSnapshot.progressMs,
+      device: playback.device || playbackSnapshot.device,
+      destination: playback.destination || playbackSnapshot.destination
+    };
+  }
+  if (playback.item) lastNonEmptyPlaybackAt = now;
   playbackSnapshot = playback;
-  playbackReceivedAt = Date.now();
+  playbackReceivedAt = now;
   const item = playback.item;
   elements.track.textContent = item?.name || item?.title || "Sin reproducción";
   elements["playback-artists"].textContent = item?.artists?.join(", ") || "";
   elements["playback-album"].textContent = item?.album || "";
-  const device = typeof playback.device === "string" ? playback.device : playback.device?.name;
+  const providerId = String(item?.provider || "");
+  const source = musicState?.sources?.find((entry) => entry.id === providerId || entry.domain === providerId || providerId.startsWith(`${entry.domain}--`));
+  const sourceName = source?.name || playback.source?.name || item?.provider || "--";
+  elements["playback-source"].textContent = `Origen: ${sourceName}${item?.library ? " · Biblioteca" : ""}`;
+  const device = playbackDestinationLabel(playback);
   const status = playback.status === "paused" ? "Pausado" : playback.status === "playing" ? "Reproduciendo" : "Sin reproducción";
   elements.device.textContent = `${status} · ${device || "Sin dispositivo"}`;
   const hasPlayback = Boolean(item);
@@ -133,8 +169,15 @@ function renderPlayback(playback = {}) {
   const isPlaying = playback.status === "playing";
   elements["playback-toggle"].textContent = isPlaying ? "Ⅱ" : "▶";
   elements["playback-toggle"].setAttribute("aria-label", isPlaying ? "Pausar" : "Reproducir");
+  const rawVolume = playback.device?.volumePercent;
+  const volume = Number(rawVolume);
+  const hasVolume = rawVolume !== null && rawVolume !== undefined && Number.isFinite(volume);
+  elements["playback-volume"].disabled = !hasVolume || !musicApiUrl;
+  if (!playbackVolumeEditing && hasVolume) elements["playback-volume"].value = String(Math.max(0, Math.min(100, Math.round(volume))));
+  elements["playback-volume-value"].textContent = hasVolume ? `${Math.round(volume)}%` : "--";
   updatePlaybackProgress();
-  const artworkUrl = item?.artwork?.url;
+  const artworkPath = item?.artworkUrl || item?.artwork?.url;
+  const artworkUrl = artworkPath && musicApiUrl ? new URL(artworkPath, `${musicApiUrl}/`).toString() : artworkPath;
   if (artworkUrl && /^https?:\/\//.test(artworkUrl)) {
     elements["playback-cover"].src = artworkUrl;
     elements["playback-cover"].alt = `Portada de ${item.name || "la reproducción actual"}`;
@@ -144,6 +187,30 @@ function renderPlayback(playback = {}) {
     elements["playback-cover"].removeAttribute("src");
     elements["playback-cover"].classList.remove("visible");
     elements["playback-cover-placeholder"].classList.remove("hidden");
+  }
+}
+
+async function setPlaybackVolume() {
+  if (!musicApiUrl || elements["playback-volume"].disabled) return;
+  const volumePercent = Number(elements["playback-volume"].value);
+  elements["playback-volume"].disabled = true;
+  elements["playback-controls-status"].textContent = `Ajustando volumen a ${volumePercent}%…`;
+  try {
+    const response = await fetch(`${musicApiUrl}/music/volume`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ volumePercent })
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.message || `Music Gateway respondió HTTP ${response.status}`);
+    playbackRequestGeneration += 1;
+    renderPlayback(result);
+    elements["playback-controls-status"].textContent = "";
+  } catch (error) {
+    elements["playback-controls-status"].textContent = error.message;
+    renderPlayback(playbackSnapshot || {});
+  } finally {
+    playbackVolumeEditing = false;
   }
 }
 
@@ -172,10 +239,13 @@ async function runPlaybackCommand(action) {
 
 async function loadCurrentPlayback() {
   if (!musicApiUrl) return false;
+  const generation = ++playbackRequestGeneration;
   try {
-    const response = await fetch(`${musicApiUrl}/music/playback`);
+    const response = await fetch(`${musicApiUrl}/music/playback`, { cache: "no-store" });
     if (!response.ok) return false;
-    renderPlayback(await response.json());
+    const playback = await response.json();
+    if (generation !== playbackRequestGeneration) return false;
+    renderPlayback(playback);
     return true;
   } catch { return false; }
 }
@@ -293,8 +363,41 @@ function updateMusicSummary() {
   if (!musicState) return;
   const count = musicState.summary?.available || 0;
   elements["music-destinations-summary"].textContent = count === 1 ? "1 disponible" : `${count} disponibles`;
-  const spotify = musicState.integrations?.spotify;
-  elements["spotify-connect-summary"].textContent = spotify?.connected ? "Cuenta conectada" : (spotify?.clientId ? "Pendiente de conectar" : "Sin configurar");
+  const sources = musicState.sources || [];
+  const active = sources.find((item) => item.active || item.id === musicState.activeSourceId);
+  const sourceSummary = sources.length ? `Origen activo: ${active?.name || "sin seleccionar"}` : "Sin orígenes configurados";
+  elements["music-sources-menu-summary"].textContent = active?.name || (sources.length ? `${sources.length} disponibles` : "Sin configurar");
+  elements["music-sources-summary"].textContent = sourceSummary;
+  renderMusicSources();
+}
+
+function renderMusicSources() {
+  const sources = (musicState?.sources || []).filter((source) => source.available !== false);
+  elements["music-sources-list"].replaceChildren(...sources.map((source) => {
+    const button = document.createElement("button");
+    const active = source.active || source.id === musicState.activeSourceId;
+    button.className = `destination-card${active ? " active selected" : ""}`;
+    button.disabled = active;
+    button.innerHTML = '<span class="destination-icon">♫</span><span><strong></strong><small class="destination-meta"></small></span><span class="selection-mark"></span>';
+    button.querySelector("strong").textContent = source.name;
+    button.querySelector(".destination-meta").textContent = `${source.domain}${active ? " · Origen activo" : ""}`;
+    button.querySelector(".selection-mark").textContent = active ? "✓" : "";
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      try {
+        const response = await fetch(`${musicApiUrl}/sources/active`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: source.id }) });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.message || `HTTP ${response.status}`);
+        musicState.activeSourceId = result.id;
+        musicState.sources = musicState.sources.map((item) => ({ ...item, active: item.id === result.id }));
+        updateMusicSummary();
+      } catch (error) {
+        elements["music-sources-status"].textContent = error.message;
+        button.disabled = false;
+      }
+    });
+    return button;
+  }));
 }
 
 function destinationDisplayName(destination) {
@@ -305,7 +408,7 @@ function renderMusicDestinations() {
   const destinations = musicState?.destinations || [];
   elements["music-destinations-list"].replaceChildren(...destinations.map((destination) => {
     const button = document.createElement("button");
-    button.className = `destination-card${destination.available ? "" : " offline"}`;
+    button.className = `destination-card${destination.active ? " active" : ""}${destination.available ? "" : " offline"}`;
     button.type = "button";
     button.innerHTML = '<span class="destination-icon">🔊</span><span><strong></strong><small class="destination-meta"></small><small class="destination-route"></small></span><span class="chevron">›</span>';
     button.querySelector("strong").textContent = destinationDisplayName(destination);
@@ -313,8 +416,7 @@ function renderMusicDestinations() {
     const dot = document.createElement("span");
     dot.className = `availability-dot${destination.available ? " online" : ""}`;
     meta.replaceChildren(dot, document.createTextNode(`${destination.available ? "Disponible" : "Desconectado"}${destination.room ? ` · ${destination.room}` : ""}`));
-    const route = destination.routes.find((item) => item.id === destination.preferredRouteId);
-    button.querySelector(".destination-route").textContent = `${destination.active ? "Activo · " : ""}${route?.label || "Sin ruta configurada"}`;
+    button.querySelector(".destination-route").textContent = `${destination.active ? "Activo · " : ""}${destination.provider || "Music Assistant"}`;
     button.addEventListener("click", () => openMusicDestination(destination.id));
     return button;
   }));
@@ -325,9 +427,11 @@ function renderMusicDestinations() {
 async function loadMusicDestinations({ discover = false } = {}) {
   if (!musicApiUrl) {
     elements["music-destinations-status"].textContent = "Selecciona primero un servidor disponible.";
+    elements["music-sources-status"].textContent = "Selecciona primero un servidor disponible.";
     return false;
   }
   elements["music-destinations-status"].textContent = discover ? "Buscando reproductores…" : "Cargando destinos…";
+  elements["music-sources-status"].textContent = "Cargando orígenes…";
   elements["discover-music-destinations"].disabled = true;
   try {
     const response = await fetch(`${musicApiUrl}/destinations${discover ? "/discover" : ""}`, { method: discover ? "POST" : "GET" });
@@ -339,110 +443,64 @@ async function loadMusicDestinations({ discover = false } = {}) {
     elements["music-destinations-status"].textContent = errors.length
       ? `Búsqueda terminada con avisos: ${errors.map((item) => item.message).join(" · ")}`
       : (discover ? "Búsqueda terminada" : "");
+    elements["music-sources-status"].textContent = "";
     return true;
   } catch (error) {
-    elements["music-destinations-status"].textContent = "No se pudo conectar con Music Gateway.";
+    elements["music-destinations-status"].textContent = "Music Assistant no está conectado. Configúralo desde Configuración → Music Assistant.";
+    elements["music-sources-status"].textContent = "Music Assistant no está conectado. Configúralo desde Configuración → Music Assistant.";
     return false;
   } finally {
     elements["discover-music-destinations"].disabled = false;
   }
 }
 
-function fillSpotifyConfig() {
-  const spotify = musicState?.integrations?.spotify;
-  if (!spotify) return;
-  elements["spotify-client-id"].value = spotify.clientId || "";
-  elements["spotify-redirect-uri"].value = spotify.redirectUri || "";
-  elements["spotify-authorize"].textContent = spotify.connected ? "Reconectar Spotify" : "Conectar Spotify";
-  updateMusicSummary();
+async function loadMusicAssistantStatus() {
+  if (!musicApiUrl) {
+    elements["music-assistant-summary"].textContent = "Selecciona un servidor";
+    elements["music-assistant-status"].textContent = "Selecciona primero un servidor disponible.";
+    return false;
+  }
+  try {
+    const response = await fetch(`${musicApiUrl}/integration/music-assistant`);
+    const status = await response.json();
+    if (!response.ok) throw new Error(status.message || `HTTP ${response.status}`);
+    elements["music-assistant-summary"].textContent = status.connected ? "Conectado" : "Requiere autenticación";
+    elements["music-assistant-status"].textContent = status.connected
+      ? "Music Gateway está autenticado y listo para controlar Music Assistant."
+      : `Inicia sesión para autorizar Music Gateway. ${status.message || ""}`.trim();
+    elements["music-assistant-form"].hidden = status.connected;
+    return status.connected;
+  } catch (error) {
+    elements["music-assistant-summary"].textContent = "No disponible";
+    elements["music-assistant-status"].textContent = "No se pudo consultar Music Gateway.";
+    elements["music-assistant-form"].hidden = false;
+    return false;
+  }
 }
 
-async function saveSpotifyConfig(event) {
+async function connectMusicAssistant(event) {
   event.preventDefault();
-  elements["spotify-connect-status"].textContent = "Guardando…";
+  const button = elements["music-assistant-form"].querySelector("button[type=submit]");
+  button.disabled = true;
+  elements["music-assistant-status"].textContent = "Autenticando y creando token…";
   try {
-    const response = await fetch(`${musicApiUrl}/integrations/spotify`, {
-      method: "PUT",
+    const response = await fetch(`${musicApiUrl}/integration/music-assistant/login`, {
+      method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ clientId: elements["spotify-client-id"].value, redirectUri: elements["spotify-redirect-uri"].value })
+      body: JSON.stringify({
+        username: elements["music-assistant-username"].value,
+        password: elements["music-assistant-password"].value
+      })
     });
     const result = await response.json();
+    elements["music-assistant-password"].value = "";
     if (!response.ok) throw new Error(result.message || `HTTP ${response.status}`);
-    musicState.integrations.spotify = result;
-    fillSpotifyConfig();
-    elements["spotify-connect-status"].textContent = "Configuración guardada";
+    await loadMusicAssistantStatus();
+    await loadMusicDestinations();
   } catch (error) {
-    elements["spotify-connect-status"].textContent = error.message;
-  }
-}
-
-async function authorizeSpotify() {
-  elements["spotify-connect-status"].textContent = "Preparando autorización…";
-  const authWindow = window.open("", "spotify-auth");
-  try {
-    await saveSpotifyConfig(new Event("submit"));
-    const response = await fetch(`${musicApiUrl}/integrations/spotify/authorize`, { method: "POST" });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.message || `HTTP ${response.status}`);
-    if (authWindow) authWindow.location = result.authorizationUrl;
-    else window.location.href = result.authorizationUrl;
-    elements["spotify-connect-status"].textContent = "Completa la autorización de Spotify y luego vuelve a buscar dispositivos.";
-  } catch (error) {
-    if (authWindow) authWindow.close();
-    elements["spotify-connect-status"].textContent = error.message;
-  }
-}
-
-function renderDiscoveredSpotifyDevices(devices) {
-  const savedIds = new Set((musicState?.destinations || []).map((item) => item.id));
-  elements["spotify-devices-list"].replaceChildren(...devices.map((device) => {
-    const card = document.createElement("div");
-    card.className = "destination-card";
-    card.innerHTML = '<span class="destination-icon">♫</span><span><strong></strong><small class="destination-meta"></small></span><button class="save-button compact" type="button"></button>';
-    card.querySelector("strong").textContent = device.name;
-    card.querySelector(".destination-meta").textContent = `${device.model}${device.active ? " · En reproducción" : ""}${device.restricted ? " · Control restringido" : ""}`;
-    const button = card.querySelector("button");
-    button.textContent = savedIds.has(device.id) ? "Agregado" : "Agregar";
-    button.disabled = savedIds.has(device.id) || device.restricted;
-    button.addEventListener("click", async () => {
-      button.disabled = true;
-      try {
-        const response = await fetch(`${musicApiUrl}/destinations`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(device) });
-        const result = await response.json();
-        if (!response.ok) throw new Error(result.message || `HTTP ${response.status}`);
-        musicState.destinations.push(result);
-        button.textContent = "Agregado";
-        renderMusicDestinations();
-      } catch (error) {
-        button.disabled = false;
-        elements["spotify-connect-status"].textContent = error.message;
-      }
-    });
-    return card;
-  }));
-}
-
-async function discoverSpotifyDevices() {
-  elements["discover-music-destinations"].disabled = true;
-  elements["spotify-connect-status"].textContent = "Consultando dispositivos disponibles en Spotify…";
-  try {
-    const response = await fetch(`${musicApiUrl}/destinations/discover`, { method: "POST" });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.message || `HTTP ${response.status}`);
-    musicState = result;
-    fillSpotifyConfig();
-    renderMusicDestinations();
-    renderDiscoveredSpotifyDevices(result.discovered || []);
-    elements["spotify-connect-status"].textContent = result.errors?.length
-      ? result.errors.map((item) => item.message).join(" · ")
-      : result.discovered.length
-        ? `${result.discovered.length} dispositivo(s) encontrado(s)`
-        : "Spotify no devolvió dispositivos disponibles. Abre Spotify con esta misma cuenta, inicia una reproducción, selecciona el equipo desde Conectar a un dispositivo y vuelve a buscar.";
-  } catch (error) {
-    elements["spotify-connect-status"].textContent = error.message;
-  } finally {
-    elements["discover-music-destinations"].disabled = false;
-  }
+    elements["music-assistant-password"].value = "";
+    elements["music-assistant-status"].textContent = error.message;
+  } finally { button.disabled = false; }
 }
 
 function openMusicDestination(id) {
@@ -455,14 +513,7 @@ function openMusicDestination(id) {
   elements["music-destination-enabled"].checked = destination.enabled !== false;
   elements["music-destination-active"].textContent = destination.active ? "Destino activo" : "Usar como destino activo";
   elements["music-destination-active"].disabled = Boolean(destination.active) || destination.enabled === false;
-  elements["music-destination-route"].replaceChildren(...destination.routes.map((route) => {
-    const option = document.createElement("option");
-    option.value = route.id;
-    option.textContent = `${route.label}${route.available ? "" : " (no disponible)"}`;
-    option.selected = route.id === destination.preferredRouteId;
-    return option;
-  }));
-  elements["music-destination-detail"].textContent = [destination.name, destination.model, `Origen: ${destination.source}`].filter(Boolean).join(" · ");
+  elements["music-destination-detail"].textContent = [destination.name, destination.model, `Proveedor de destino MA: ${destination.provider}`].filter(Boolean).join(" · ");
   elements["music-destination-status"].textContent = "";
   showScreen("music-destination-screen");
 }
@@ -480,7 +531,13 @@ async function setActiveMusicDestination() {
     musicState.activeDestinationId = result.id;
     musicState.destinations = musicState.destinations.map((item) => ({ ...item, active: item.id === result.id }));
     elements["music-destination-active"].textContent = "Destino activo";
-    elements["music-destination-status"].textContent = `${destinationDisplayName(result)} es ahora el destino activo`;
+    elements["music-destination-status"].textContent = result.transferred
+      ? `La reproducción se transfirió a ${destinationDisplayName(result)}`
+      : `${destinationDisplayName(result)} es ahora el destino activo`;
+    if (result.playback) {
+      playbackRequestGeneration += 1;
+      renderPlayback({ ...result.playback, destination: result });
+    }
     renderMusicDestinations();
   } catch (error) {
     elements["music-destination-active"].disabled = false;
@@ -501,7 +558,6 @@ async function saveMusicDestination(event) {
       body: JSON.stringify({
         alias: elements["music-destination-alias"].value,
         room: elements["music-destination-room"].value,
-        preferredRouteId: elements["music-destination-route"].value,
         enabled: elements["music-destination-enabled"].checked
       })
     });
@@ -545,16 +601,21 @@ function showScreen(id) {
 }
 
 function deviceName(kind, id) {
-  return audioState?.devices[kind].find((device) => device.id === id)?.name || (id ? "Dispositivo no disponible" : "Sin configurar");
+  return audioState?.devices[kind].find((device) => device.id === id)?.name || (id ? "Dispositivo no disponible" : (kind === "input" ? "Entrada predeterminada" : "Salida predeterminada"));
 }
 
 function updateAudioSummaries() {
   if (!audioState) return;
-  const channel = Number.isInteger(audioState.config.inputChannel) ? ` · Canal ${audioState.config.inputChannel + 1}` : "";
-  elements["input-summary"].textContent = `${deviceName("input", audioState.config.inputDeviceId)}${channel}`;
-  elements["output-summary"].textContent = deviceName("output", audioState.config.outputDeviceId);
+  const effective = audioState.effectiveConfig || audioState.config;
+  const channel = Number.isInteger(effective.inputChannel) ? ` · Canal ${effective.inputChannel + 1}` : "";
+  const inputFallback = effective.inputDeviceId !== audioState.config.inputDeviceId ? " · fallback" : "";
+  const outputFallback = effective.outputDeviceId !== audioState.config.outputDeviceId ? " · fallback" : "";
+  elements["input-summary"].textContent = `${deviceName("input", effective.inputDeviceId)}${channel}${inputFallback}`;
+  elements["output-summary"].textContent = `${deviceName("output", effective.outputDeviceId)}${outputFallback}`;
   const voice = audioState.voices?.find((item) => item.id === audioState.config.ttsVoiceId) || audioState.voices?.[0];
   elements["voice-summary"].textContent = voice?.name || "Sin voces disponibles";
+  const player = audioState.musicPlayer;
+  elements["music-player-summary"].textContent = player?.enabled ? `${player.name} · ${player.running ? "Activo" : "No iniciado"}` : "Deshabilitado";
 }
 
 async function loadAudio() {
@@ -578,16 +639,74 @@ async function loadAudio() {
   }
 }
 
+function fillMusicPlayer() {
+  if (!audioState) return;
+  elements["music-player-name"].value = audioState.config.musicPlayerName || audioState.musicPlayer?.name || "Satélite";
+  elements["music-player-output"].value = audioState.config.musicOutputDeviceId || "";
+  renderMusicPlayerOutputs();
+  elements["music-player-enabled"].checked = audioState.config.musicPlayerEnabled !== false;
+  elements["music-player-status"].textContent = audioState.musicPlayer?.running
+    ? "Sendspin está activo y disponible para Music Assistant."
+    : (audioState.config.musicPlayerEnabled === false ? "El reproductor está deshabilitado." : (audioState.musicPlayer?.error || "Sendspin no está activo. Comprueba que esté instalado en el satélite."));
+}
+
+function renderMusicPlayerOutputs() {
+  const selected = elements["music-player-output"].value;
+  const outputs = [
+    { id: "", name: "Salida predeterminada", description: "Sendspin utilizará la salida predeterminada del sistema" },
+    ...(audioState?.devices.output || []).map((device) => ({ id: device.name, name: device.name, description: device.available === false ? "No disponible" : "Disponible", available: device.available !== false }))
+  ];
+  if (selected && !outputs.some((item) => item.id === selected)) outputs.push({ id: selected, name: selected, description: "Configuración guardada anteriormente", available: true });
+  elements["music-player-output-list"].replaceChildren(...outputs.map((output) => {
+    const active = output.id === selected;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `device-option${active ? " selected" : ""}`;
+    button.disabled = output.available === false;
+    button.innerHTML = `<span><strong></strong><small></small></span><span class="selection-mark">${active ? "✓" : ""}</span>`;
+    button.querySelector("strong").textContent = output.name;
+    button.querySelector("small").textContent = output.description;
+    button.addEventListener("click", () => {
+      elements["music-player-output"].value = output.id;
+      renderMusicPlayerOutputs();
+    });
+    return button;
+  }));
+}
+
+async function saveMusicPlayer(event) {
+  event.preventDefault();
+  const button = elements["music-player-form"].querySelector("button[type=submit]");
+  button.disabled = true;
+  try {
+    await saveConfig({
+      musicPlayerName: elements["music-player-name"].value,
+      musicOutputDeviceId: elements["music-player-output"].value || null,
+      musicPlayerEnabled: elements["music-player-enabled"].checked
+    }, elements["music-player-status"]);
+    await loadAudio();
+    fillMusicPlayer();
+    elements["music-player-status"].textContent = "Configuración guardada. Music Assistant puede tardar unos segundos en actualizar el destino.";
+  } catch (error) {
+    elements["music-player-status"].textContent = error.message;
+  } finally { button.disabled = false; }
+}
+
 function renderDevices() {
   const configKey = activeAudioKind === "input" ? "inputDeviceId" : "outputDeviceId";
+  const listKey = activeAudioKind === "input" ? "inputDeviceIds" : "outputDeviceIds";
   const selectedId = audioState.config[configKey];
-  elements["device-list"].replaceChildren(...audioState.devices[activeAudioKind].map((device) => {
+  const effectiveId = (audioState.effectiveConfig || audioState.config)[configKey];
+  const priorities = audioState.config[listKey] || [];
+  const defaultOption = { id: null, name: activeAudioKind === "input" ? "Entrada predeterminada" : "Salida predeterminada", available: true, isDefault: true };
+  elements["device-list"].replaceChildren(...[defaultOption, ...audioState.devices[activeAudioKind]].map((device) => {
     const button = document.createElement("button");
     button.className = `device-option${device.id === selectedId ? " selected" : ""}`;
     button.disabled = !device.available;
     button.innerHTML = `<span><strong></strong><small></small></span><span class="selection-mark">${device.id === selectedId ? "✓" : ""}</span>`;
     button.querySelector("strong").textContent = device.name;
-    button.querySelector("small").textContent = device.simulated ? "Modo simulador" : (device.available ? "Disponible" : "No disponible");
+    const priority = priorities.indexOf(device.id);
+    button.querySelector("small").textContent = device.isDefault ? "Usa el dispositivo predeterminado del sistema" : (device.simulated ? "Modo simulador" : `${device.available ? "Disponible" : "No disponible"}${priority >= 0 ? ` · Prioridad ${priority + 1}` : ""}${device.id === effectiveId ? " · En uso" : ""}`);
     button.addEventListener("click", () => selectDevice(configKey, device.id));
     return button;
   }));
@@ -598,8 +717,8 @@ async function openAudio(kind) {
   showScreen("audio-screen");
   elements["audio-title"].textContent = kind === "input" ? "Micrófono" : "Salida de voz";
   elements["audio-help"].textContent = kind === "input"
-    ? "Elige el dispositivo que escuchará tus solicitudes."
-    : "Elige dónde se reproducirán las respuestas del asistente.";
+    ? "Elige el micrófono preferido. Los seleccionados anteriormente quedan como fallback por orden de prioridad."
+    : "Elige la salida preferida. Las seleccionadas anteriormente quedan como fallback por orden de prioridad.";
   elements["device-list"].replaceChildren();
   if (await loadAudio()) renderDevices();
 }
@@ -611,9 +730,10 @@ async function saveConfig(update, statusElement = elements["audio-status"]) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(update)
   });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
   const result = await response.json();
+  if (!response.ok) throw new Error(result.message || `HTTP ${response.status}`);
   audioState.config = result.config;
+  if (result.effectiveConfig) audioState.effectiveConfig = result.effectiveConfig;
   updateAudioSummaries();
 }
 
@@ -623,6 +743,12 @@ async function selectDevice(configKey, deviceId) {
   try {
     await saveConfig({ [configKey]: deviceId });
     if (configKey === "inputDeviceId") {
+      if (deviceId === null) {
+        await saveConfig({ inputChannel: 0 });
+        elements["audio-status"].textContent = "Entrada predeterminada guardada";
+        renderDevices();
+        return;
+      }
       await selectInputChannel(deviceId);
       return;
     }
@@ -793,6 +919,7 @@ async function connect(generation = displaySocketGeneration) {
       elements["moon-phase-name"].textContent = event.payload.moonPhase?.name || "Fase lunar";
     }
     if (event.type === "music.playback.changed") {
+      playbackRequestGeneration += 1;
       renderPlayback(event.payload);
     }
   });
@@ -802,23 +929,22 @@ document.querySelectorAll("[data-screen]").forEach((button) => button.addEventLi
   showScreen(button.dataset.screen);
   if (button.dataset.screen === "settings-screen") {
     await loadServers();
-    await Promise.all([loadAudio(), loadAssistantConfig(), loadLocation(), loadMusicDestinations()]);
+    await Promise.all([loadAudio(), loadAssistantConfig(), loadLocation(), loadMusicAssistantStatus(), loadMusicDestinations()]);
   }
   if (button.dataset.screen === "server-screen") await loadServers();
   if (button.dataset.screen === "assistant-screen") await loadAssistantConfig();
   if (button.dataset.screen === "voice-screen") await openVoices();
   if (button.dataset.screen === "location-screen") await loadLocation();
   if (button.dataset.screen === "music-destinations-screen") await loadMusicDestinations();
-  if (button.dataset.screen === "spotify-connect-screen") {
-    if (!musicState) await loadMusicDestinations();
-    fillSpotifyConfig();
-  }
+  if (button.dataset.screen === "music-sources-screen") await loadMusicDestinations();
+  if (button.dataset.screen === "music-assistant-screen") await loadMusicAssistantStatus();
+  if (button.dataset.screen === "music-player-screen") { await loadAudio(); fillMusicPlayer(); }
 }));
 document.querySelectorAll("[data-audio-kind]").forEach((button) => button.addEventListener("click", () => openAudio(button.dataset.audioKind)));
 elements["assistant-form"].addEventListener("submit", saveAssistantName);
 elements["location-form"].addEventListener("submit", saveLocation);
 elements["detect-location"].addEventListener("click", detectLocation);
-elements["discover-music-destinations"].addEventListener("click", discoverSpotifyDevices);
+elements["discover-music-destinations"].addEventListener("click", () => loadMusicDestinations({ discover: true }));
 elements["discover-servers"].addEventListener("click", async () => {
   elements["discover-servers"].disabled = true;
   await loadServers({ refresh: true });
@@ -826,11 +952,24 @@ elements["discover-servers"].addEventListener("click", async () => {
 });
 elements["music-destination-form"].addEventListener("submit", saveMusicDestination);
 elements["music-destination-active"].addEventListener("click", setActiveMusicDestination);
-elements["spotify-connect-form"].addEventListener("submit", saveSpotifyConfig);
-elements["spotify-authorize"].addEventListener("click", authorizeSpotify);
+elements["music-player-form"].addEventListener("submit", saveMusicPlayer);
+elements["music-assistant-form"].addEventListener("submit", connectMusicAssistant);
 elements["playback-previous"].addEventListener("click", () => runPlaybackCommand("previous"));
 elements["playback-toggle"].addEventListener("click", () => runPlaybackCommand(playbackSnapshot?.status === "playing" ? "pause" : "resume"));
 elements["playback-next"].addEventListener("click", () => runPlaybackCommand("next"));
+elements["playback-volume"].addEventListener("pointerdown", () => { playbackVolumeEditing = true; });
+elements["playback-volume"].addEventListener("input", () => {
+  playbackVolumeEditing = true;
+  elements["playback-volume-value"].textContent = `${elements["playback-volume"].value}%`;
+});
+elements["playback-volume"].addEventListener("change", () => void setPlaybackVolume());
+elements["playback-volume"].addEventListener("pointerup", () => { playbackVolumeEditing = false; });
+elements["playback-volume"].addEventListener("pointercancel", () => { playbackVolumeEditing = false; });
+elements["playback-volume"].addEventListener("blur", () => { playbackVolumeEditing = false; });
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) void loadCurrentPlayback();
+});
+window.addEventListener("focus", () => void loadCurrentPlayback());
 
 updateClock();
 setInterval(updateClock, 1000);
@@ -843,5 +982,6 @@ void (async () => {
   await loadCurrentPlayback();
   connect();
 })();
-setInterval(() => void loadCurrentPlayback(), 5000);
+setInterval(() => { if (!document.hidden) void loadCurrentPlayback(); }, 2_000);
+setInterval(() => { if (musicApiUrl) void loadMusicAssistantStatus(); }, 30_000);
 setInterval(updatePlaybackProgress, 1000);

@@ -7,13 +7,45 @@ Base de un asistente de voz distribuido: el backend concentra sesiones, decision
 - `apps/server`: backend HTTP/WebSocket y orquestación de eventos.
 - `apps/satellite`: cliente del satélite; incluye simulador sin hardware.
 - `apps/display`: interfaz HTML/CSS/JavaScript para Chromium Kiosk.
-- `services/music-gateway`: abstracción de música con proveedor simulado inicial.
+- `services/music-gateway`: frontera desacoplada que usa Music Assistant como fuente única de biblioteca, colas y reproductores.
 
-## Spotify Connect
+## Music Assistant
 
-Music Gateway descubre destinos mediante Spotify Web API. En el display, abre **Configuración → Destinos de música → Spotify Connect**, introduce el Client ID de una aplicación creada en Spotify for Developers y registra en esa aplicación la Redirect URI que muestra la pantalla. El flujo OAuth usa PKCE y no requiere Client Secret. Los tokens se guardan únicamente en `dev/server/config/music.json`, fuera de Git.
+Music Assistant es la única fuente de orígenes musicales, biblioteca, colas y destinos. `MusicGateway` conserva una frontera propia para no acoplar las tools al protocolo de MA, pero no mantiene catálogos ni descubre reproductores por su cuenta. Configura en MA los proveedores deseados (radio, biblioteca local, servicios de streaming, etc.) y el asistente los consultará de forma unificada.
 
-La cuenta y el propietario de la aplicación deben cumplir los requisitos vigentes de Spotify, incluido Premium para las aplicaciones en Development Mode. Spotify sólo devuelve dispositivos Connect disponibles recientemente para esa cuenta; abre Spotify en el dispositivo si no aparece y repite la búsqueda.
+En `dev/server/.env` configura:
+
+```bash
+MUSIC_ASSISTANT_URL=http://127.0.0.1:8095
+MUSIC_ASSISTANT_TOKEN=
+```
+
+`startServer.sh` inicia automáticamente el contenedor oficial de Music Assistant con red host y espera a que su interfaz responda antes de levantar Music Gateway. Sus datos persisten en `dev/server/music-assistant/data`. `stopServer.sh` detiene también el contenedor de MA.
+
+En el primer inicio abre `http://IP_DEL_SERVIDOR:8095` y completa la creación del administrador. Después, desde el display del satélite, abre **Configuración → Music Assistant** e inicia sesión una sola vez. Music Gateway crea automáticamente un token exclusivo, lo guarda con permisos `600` y descarta la contraseña. El backend se inicia aunque esa autorización aún esté pendiente, precisamente para permitir completar este flujo desde el display.
+
+Si el token vence o es revocado, cualquier respuesta `401` de MA lo invalida inmediatamente en memoria. El display consulta el estado cada 30 segundos, vuelve a indicar **Requiere autenticación** y habilita el mismo formulario para renovar la autorización.
+
+El token queda en el archivo ignorado por Git `dev/server/.music-assistant.env`:
+
+```bash
+MUSIC_ASSISTANT_TOKEN=token_generado_en_ma
+```
+
+El display muestra los orígenes y reproductores informados por MA, permite asignar alias/habitación al reconocimiento por voz y conserva únicamente esas preferencias junto al destino activo en `dev/server/config/music.json`.
+
+### Satélite como parlante de MA
+
+El satélite ejecuta el cliente oficial Sendspin en modo daemon. Sendspin se anuncia por mDNS y Music Assistant lo incorpora como reproductor sin Spotify Connect, librespot ni transmisión directa desde el backend.
+
+`startSatellite.sh` instala automáticamente una copia local de Sendspin y Python 3.12 mediante `uv` si `SENDSPIN_EXECUTABLE=sendspin` y el comando no está disponible. La instalación queda en `dev/satellite/.tools` y sólo se realiza una vez. También puede instalarse manualmente:
+
+```bash
+uv tool install sendspin
+sendspin audio-devices list
+```
+
+Desde **Configuración → Parlante Music Assistant** se define el nombre visible, se habilita el reproductor y opcionalmente se indica el índice, prefijo o dispositivo ALSA de salida. La salida musical es independiente de `outputDeviceId`, que sigue reservada para TTS. En una red local normal, `MUSIC_ASSISTANT_SENDSPIN_URL` queda vacío para usar mDNS; puede fijarse como `ws://IP_MA:8927/sendspin` si el descubrimiento no funciona.
 - `packages/contracts`: contratos y tipos de eventos compartidos.
 - `packages/shared`: utilidades comunes sin lógica de negocio.
 
@@ -53,7 +85,7 @@ Para detenerlos:
 ./dev/server/stopServer.sh
 ```
 
-Los scripts guardan PID y logs dentro de su carpeta `dev`, evitan arranques duplicados y pueden ejecutarse desde cualquier directorio. El script del satélite también levanta el display en `http://localhost:8080`.
+Los scripts guardan PID y logs dentro de su carpeta `dev`, evitan arranques duplicados y pueden ejecutarse desde cualquier directorio. El servidor levanta Music Assistant y SearXNG mediante Docker Compose; el script del satélite levanta el display en `http://localhost:8080`.
 
 ## Configuración local de audio
 
@@ -99,7 +131,7 @@ Para cambiar el nombre se usa Configuración → Nombre del asistente en el disp
 
 El backend usa Ollama con `qwen3.5:9b` para interpretar el texto reconocido. Las tools son módulos de código con una definición JSON para el LLM y un método `execute` registrado en `ToolRegistry`. La primera implementación incluye `assistant_get_identity`, que retorna el nombre, propósito y capacidades configuradas del asistente.
 
-`startServer.sh` reutiliza Ollama si la API ya está disponible; en caso contrario ejecuta `ollama serve` y guarda su PID. `stopServer.sh` sólo detiene Ollama cuando fue iniciado por el propio entorno. El modelo se mantiene cargado durante 30 minutos y el modo thinking está desactivado para reducir latencia de voz.
+`startServer.sh` usa la instancia indicada por `OLLAMA_URL`. Si apunta a `localhost` o `127.0.0.1` y la API no está disponible, ejecuta `ollama serve` y guarda su PID; si apunta a otra máquina, nunca intenta iniciar ni detener Ollama localmente. `stopServer.sh` sólo detiene Ollama cuando fue iniciado por el propio entorno. El modelo se mantiene cargado durante 30 minutos y el modo thinking está desactivado para reducir latencia de voz.
 
 ## Ejecución como servicio Linux
 

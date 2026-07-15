@@ -17,7 +17,8 @@ export class PipeWireAudioDeviceProvider extends AudioDeviceProvider {
       .map((device) => normalizeDevice(
         device.name,
         device.description || device.properties?.["device.description"] || device.name,
-        { available: device.state !== "SUSPENDED", backend: this.name }
+        // SUSPENDED significa inactivo y se reactiva al abrirlo; no está desconectado.
+        { available: device.state !== "UNAVAILABLE", backend: this.name }
       ));
   }
 

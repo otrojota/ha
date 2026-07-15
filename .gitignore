@@ -1,7 +1,6 @@
 # Dependencias y resultados de compilación/pruebas
 node_modules/
 coverage/
-dist/
 build/
 .cache/
 
@@ -48,6 +47,7 @@ dev/server/.music-assistant.env
 dev/server/models/
 dev/satellite/models/
 dev/satellite/.venv/
+dev/satellite/.tools/
 
 # Sistema operativo y editores
 .DS_Store

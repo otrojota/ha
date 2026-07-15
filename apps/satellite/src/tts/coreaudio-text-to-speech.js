@@ -22,8 +22,8 @@ export class CoreAudioTextToSpeech extends TextToSpeechProvider {
 
   async speak(text, { outputDeviceId, voiceId }) {
     const output = /^coreaudio:(\d+)$/.exec(outputDeviceId || "");
-    if (!output) throw new Error("La salida CoreAudio configurada no es válida");
-    const args = ["-a", output[1]];
+    if (outputDeviceId && !output) throw new Error("La salida CoreAudio configurada no es válida");
+    const args = output ? ["-a", output[1]] : [];
     if (voiceId) args.push("-v", voiceId);
     args.push(text);
     await execFileAsync("say", args, { timeout: 120_000, maxBuffer: 1024 * 1024 });
