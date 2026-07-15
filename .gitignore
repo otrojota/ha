@@ -35,8 +35,10 @@ dev/server/config/music.json
 dev/server/config/music-credits.json
 dev/server/config/music-assistant-credentials.json
 dev/server/config/server.json
+dev/server/config/identity*.json
 dev/satellite/config/assistant.json
 dev/satellite/config/audio.json
+dev/satellite/config/server.json
 
 # Datos y secretos heredados de Music Assistant
 dev/server/music-assistant/data/

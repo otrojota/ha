@@ -12,7 +12,10 @@ export class CoreAudioDeviceProvider extends AudioDeviceProvider {
   async listInputDevices() {
     let output = "";
     try {
-      const result = await execFileAsync("ffmpeg", ["-hide_banner", "-f", "avfoundation", "-list_devices", "true", "-i", ""], { timeout: 5000 });
+      const result = await execFileAsync("ffmpeg", ["-hide_banner", "-f", "avfoundation", "-list_devices", "true", "-i", ""], {
+        timeout: 5000,
+        killSignal: "SIGKILL"
+      });
       output = `${result.stdout || ""}\n${result.stderr || ""}`;
     } catch (error) {
       output = `${error.stdout || ""}\n${error.stderr || ""}`;
@@ -35,7 +38,7 @@ export class CoreAudioDeviceProvider extends AudioDeviceProvider {
 
   async listOutputDevices() {
     // `say` utiliza CoreAudio y sus IDs se pueden reutilizar directamente para reproducir TTS con `say -a <id>`.
-    const { stdout } = await execFileAsync("say", ["-a", "?"], { timeout: 5000 });
+    const { stdout } = await execFileAsync("say", ["-a", "?"], { timeout: 5000, killSignal: "SIGKILL" });
     return stdout.split("\n").flatMap((line) => {
       const match = line.match(/^\s*(\d+)\s+(.+?)\s*$/);
       return match ? [normalizeDevice(`coreaudio:${match[1]}`, match[2], { backend: this.name })] : [];
@@ -50,7 +53,7 @@ export class CoreAudioDeviceProvider extends AudioDeviceProvider {
       const result = await execFileAsync("ffmpeg", [
         "-hide_banner", "-f", "avfoundation", "-i", `:${match[1]}`,
         "-t", "0.05", "-f", "null", "-"
-      ], { timeout: 5000 });
+      ], { timeout: 5000, killSignal: "SIGKILL" });
       output = `${result.stdout || ""}\n${result.stderr || ""}`;
     } catch (error) {
       output = `${error.stdout || ""}\n${error.stderr || ""}`;

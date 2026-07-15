@@ -136,6 +136,7 @@ export class VoiceCapture {
   }
 
   async loop() {
+    let consecutiveFailures = 0;
     while (this.running) {
       if (this.paused) {
         await delay(100);
@@ -150,14 +151,22 @@ export class VoiceCapture {
 
       try {
         const capture = await this.capturePhrase(input, config.inputChannel);
+        consecutiveFailures = 0;
         if (!this.paused && capture?.audio?.length > 8_000) {
           await this.onPhrase(capture.audio, { commandWasArmed: capture.commandWasArmed });
         } else if (!this.paused && capture?.commandTimedOut) {
           await this.onListeningTimeout();
         }
       } catch (error) {
-        this.log("warn", "No se pudo capturar audio", { error: error.message });
-        await delay(1500);
+        if (this.paused || !this.running) continue;
+        consecutiveFailures += 1;
+        const retryDelayMs = Math.min(30_000, 1_500 * (2 ** (consecutiveFailures - 1)));
+        this.log("warn", "No se pudo capturar audio", {
+          error: error.message,
+          consecutiveFailures,
+          retryDelayMs
+        });
+        await delay(retryDelayMs);
       }
     }
   }
@@ -179,9 +188,19 @@ export class VoiceCapture {
     const child = spawn("ffmpeg", args, { stdio: ["ignore", "pipe", "pipe"] });
     this.process = child;
     const captureExpiresAt = Date.now() + this.maxPhraseSeconds * 1000;
+    let stopRequested = false;
+    let forceStopTimeout = null;
+    const requestStop = () => {
+      if (stopRequested || child.exitCode !== null || child.signalCode !== null) return;
+      stopRequested = true;
+      child.kill("SIGINT");
+      forceStopTimeout = setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      }, 2_000);
+    };
     const timeout = setInterval(() => {
       const effectiveExpiresAt = this.commandExpiresAt || captureExpiresAt;
-      if (Date.now() >= effectiveExpiresAt) child.kill("SIGINT");
+      if (Date.now() >= effectiveExpiresAt) requestStop();
     }, 100);
 
     let pendingByte = null;
@@ -218,7 +237,7 @@ export class VoiceCapture {
         peak = 0;
         if (activity.phraseEnded) {
           phraseEnded = true;
-          child.kill("SIGINT");
+          requestStop();
         }
       }
     });
@@ -228,11 +247,12 @@ export class VoiceCapture {
       stderr = `${stderr}${chunk}`.slice(-4000);
     });
 
-    const exitCode = await new Promise((resolve, reject) => {
+    const { exitCode, exitSignal } = await new Promise((resolve, reject) => {
       child.once("error", reject);
-      child.once("close", resolve);
+      child.once("close", (code, signal) => resolve({ exitCode: code, exitSignal: signal }));
     }).finally(() => {
       clearInterval(timeout);
+      clearTimeout(forceStopTimeout);
       if (this.process === child) this.process = null;
     });
 
@@ -241,8 +261,10 @@ export class VoiceCapture {
     if (speechStarted || commandTimedOut) this.commandExpiresAt = 0;
 
     try {
-      if (exitCode !== 0 && exitCode !== 255) {
-        throw new Error(`ffmpeg terminó con código ${exitCode}: ${stderr.split("\n").findLast((line) => line.trim()) || "error desconocido"}`);
+      const expectedInterrupt = exitSignal === "SIGINT" && (stopRequested || this.paused || !this.running);
+      if (exitCode !== 0 && exitCode !== 255 && !expectedInterrupt) {
+        const status = exitSignal ? `señal ${exitSignal}` : `código ${exitCode}`;
+        throw new Error(`ffmpeg terminó con ${status}: ${stderr.split("\n").findLast((line) => line.trim()) || "error desconocido"}`);
       }
       if (!speechStarted) return commandTimedOut ? { audio: null, commandWasArmed, commandTimedOut: true } : null;
       this.log("info", "Frase capturada", {
@@ -251,7 +273,8 @@ export class VoiceCapture {
       });
       return { audio: await readFile(outputPath), commandWasArmed, commandTimedOut: false };
     } catch (error) {
-      throw new Error(`ffmpeg terminó con código ${exitCode}: ${stderr.split("\n").at(-2) || error.message}`);
+      const status = exitSignal ? `señal ${exitSignal}` : `código ${exitCode}`;
+      throw new Error(`ffmpeg terminó con ${status}: ${stderr.split("\n").at(-2) || error.message}`);
     } finally {
       await unlink(outputPath).catch(() => {});
     }

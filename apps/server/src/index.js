@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { hostname } from "node:os";
 import { WebSocketServer, WebSocket } from "ws";
 import { createEvent, EventType, isEvent } from "@ha/contracts";
 import { env, jsonLog } from "@ha/shared";
@@ -44,9 +45,17 @@ import { createTransferMusicPlaybackTool } from "./tools/music/transfer-playback
 import { createGetMusicQueueTool } from "./tools/music/get-queue.tool.js";
 import { createGetCurrentMusicCreditsTool } from "./tools/music/get-current-credits.tool.js";
 import { createClearMusicQueueTool } from "./tools/music/clear-queue.tool.js";
+import { readOrCreateServerIdentity } from "./discovery/server-identity.js";
+import { ServerAdvertiser } from "./discovery/server-advertiser.js";
 
 const port = Number(env("SERVER_PORT", "3000"));
 const serverConfigPath = "dev/server/config/server.json";
+const serverHostName = hostname().replace(/\.local$/i, "");
+const serverIdentity = await readOrCreateServerIdentity(
+  env("SERVER_IDENTITY_PATH", `dev/server/config/identity-${serverHostName}.json`),
+  { name: env("SERVER_NAME", `Servidor ${serverHostName}`), log: jsonLog }
+);
+const serverAdvertiser = new ServerAdvertiser({ identity: serverIdentity, port, log: jsonLog });
 const defaultAssistantName = "Asistente";
 const followUpTimeoutMs = 5000;
 const serverConfig = await readServerConfig(serverConfigPath, jsonLog);
@@ -128,7 +137,8 @@ const server = createServer((request, response) => {
   response.setHeader("Access-Control-Allow-Methods", "GET, PUT, POST, OPTIONS");
   response.setHeader("Content-Type", "application/json");
   if (request.method === "OPTIONS") return response.end();
-  if (request.url === "/health") return response.end(JSON.stringify({ status: "ok" }));
+  if (request.url === "/health") return response.end(JSON.stringify({ status: "ok", server: serverIdentity, protocolVersion: "1" }));
+  if (request.url === "/identity") return response.end(JSON.stringify({ server: serverIdentity, protocolVersion: "1", port }));
   if (request.url === "/config/location" && request.method === "GET") return response.end(JSON.stringify({ location: serverConfig.location }));
   if (request.url === "/config/location" && request.method === "PUT") return handleLocationUpdate(request, response);
   if (request.url === "/config/location/detect" && request.method === "POST") return handleLocationDetection(response);
@@ -302,6 +312,15 @@ websocket.on("connection", (socket, request) => {
 const weatherRefresh = setInterval(() => void publishWeatherUpdate(), 15 * 60_000);
 weatherRefresh.unref();
 server.listen(port, "0.0.0.0", () => {
-  jsonLog("info", "Servidor iniciado", { port, ...serverConfig });
+  jsonLog("info", "Servidor iniciado", { port, server: serverIdentity, ...serverConfig });
+  serverAdvertiser.start();
   void publishWeatherUpdate();
 });
+
+for (const signal of ["SIGINT", "SIGTERM"]) {
+  process.once(signal, () => {
+    serverAdvertiser.stop();
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(0), 1000).unref();
+  });
+}

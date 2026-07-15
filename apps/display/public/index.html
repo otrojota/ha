@@ -30,6 +30,7 @@
           <section class="settings-group" aria-labelledby="general-settings-title">
             <h2 id="general-settings-title">Configuración general</h2>
             <div class="settings-list">
+              <button class="setting-card" data-screen="server-screen"><span class="setting-icon">🖥</span><span><strong>Servidor</strong><small id="server-summary">Buscando…</small></span><span class="chevron">›</span></button>
               <button class="setting-card" data-screen="assistant-screen"><span class="setting-icon">✨</span><span><strong>Nombre del asistente</strong><small id="assistant-summary">Asistente</small></span><span class="chevron">›</span></button>
               <button class="setting-card" data-screen="location-screen"><span class="setting-icon">📍</span><span><strong>Ubicación</strong><small id="location-summary">Sin configurar</small></span><span class="chevron">›</span></button>
               <button class="setting-card" data-screen="music-destinations-screen"><span class="setting-icon">🎵</span><span><strong>Destinos de música</strong><small id="music-destinations-summary">Sin explorar</small></span><span class="chevron">›</span></button>
@@ -44,6 +45,14 @@
             </div>
           </section>
         </div>
+      </section>
+
+      <section id="server-screen" class="screen">
+        <header class="screen-header"><button class="back-button" data-screen="settings-screen">‹</button><div><div class="eyebrow">Sistema</div><h1>Seleccionar servidor</h1></div></header>
+        <p class="text-secondary fs-5">Los servidores disponibles se descubren automáticamente en la red local. Si sólo hay uno, se selecciona sin intervención.</p>
+        <div class="destination-actions"><button id="discover-servers" class="save-button secondary" type="button">Buscar nuevamente</button></div>
+        <div id="server-status" class="status-message mt-3" role="status"></div>
+        <div id="server-list" class="device-list"></div>
       </section>
 
       <section id="assistant-screen" class="screen">

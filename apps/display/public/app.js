@@ -14,12 +14,18 @@ const elements = Object.fromEntries([
   , "music-destination-active"
   , "spotify-connect-summary", "spotify-connect-form", "spotify-client-id", "spotify-redirect-uri"
   , "spotify-authorize", "spotify-connect-status", "spotify-devices-list"
+  , "server-summary", "server-status", "server-list", "discover-servers"
 ].map((id) => [id, document.getElementById(id)]));
 
 const audioApiUrl = `${location.protocol}//${location.hostname || "localhost"}:3200/audio`;
 const assistantApiUrl = `${location.protocol}//${location.hostname || "localhost"}:3200/assistant`;
-const locationApiUrl = `${location.protocol}//${location.hostname || "localhost"}:3000/config/location`;
-const musicApiUrl = `${location.protocol}//${location.hostname || "localhost"}:3100/v1`;
+const serverApiUrl = `${location.protocol}//${location.hostname || "localhost"}:3200`;
+let locationApiUrl = null;
+let musicApiUrl = null;
+let serverState = null;
+let displaySocket = null;
+let displaySocketGeneration = 0;
+let displayReconnectTimer = null;
 let audioState = null;
 let musicState = null;
 let activeMusicDestinationId = null;
@@ -29,6 +35,71 @@ let peakAudioLevel = 0;
 let peakHoldUntil = 0;
 let playbackSnapshot = null;
 let playbackReceivedAt = 0;
+
+function applyServerState(state) {
+  serverState = state;
+  const selected = state?.selected;
+  locationApiUrl = selected ? `${selected.httpUrl}/config/location` : null;
+  musicApiUrl = selected?.musicApiUrl || null;
+  elements["server-summary"].textContent = selected
+    ? `${selected.name} · ${selected.address}:${selected.port}`
+    : state?.selectionRequired ? "Selecciona un servidor" : "Buscando…";
+}
+
+async function loadServers({ refresh = false } = {}) {
+  elements["server-status"].textContent = refresh ? "Buscando servidores…" : "";
+  try {
+    const response = await fetch(`${serverApiUrl}${refresh ? "/servers/discover" : "/servers"}`, { method: refresh ? "POST" : "GET" });
+    const state = await response.json();
+    if (!response.ok) throw new Error(state.message || `HTTP ${response.status}`);
+    applyServerState(state);
+    renderServers();
+    elements["server-status"].textContent = state.selectionRequired
+        ? "Hay varios servidores disponibles. Selecciona uno."
+        : state.selected
+          ? state.manualConfigured && state.selected.manual
+            ? "Servidor manual seleccionado; también se buscan servidores en la red."
+            : "Servidor disponible."
+          : "No se encontraron servidores todavía.";
+    return state;
+  } catch (error) {
+    elements["server-status"].textContent = "No se pudo consultar el descubrimiento del satélite.";
+    return null;
+  }
+}
+
+function renderServers() {
+  const servers = serverState?.discovered || [];
+  elements["server-list"].replaceChildren(...servers.map((server) => {
+    const selected = server.id === serverState.selected?.id;
+    const button = document.createElement("button");
+    button.className = `device-option${selected ? " selected" : ""}`;
+    button.disabled = selected;
+    button.innerHTML = `<span><strong></strong><small></small></span><span class="selection-mark">${selected ? "✓" : ""}</span>`;
+    button.querySelector("strong").textContent = server.name;
+    button.querySelector("small").textContent = `${server.address}:${server.port}${server.manual ? " · Configuración manual" : " · Descubierto en la red"}`;
+    button.addEventListener("click", () => selectServer(server.id));
+    return button;
+  }));
+}
+
+async function selectServer(id) {
+  elements["server-status"].textContent = "Conectando con el servidor…";
+  try {
+    const response = await fetch(`${serverApiUrl}/server`, {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id })
+    });
+    const state = await response.json();
+    if (!response.ok) throw new Error(state.message || `HTTP ${response.status}`);
+    applyServerState(state);
+    renderServers();
+    elements["server-status"].textContent = "Servidor seleccionado.";
+    reconnectDisplaySocket();
+    void loadCurrentPlayback();
+  } catch (error) {
+    elements["server-status"].textContent = error.message;
+  }
+}
 
 function playbackTime(milliseconds) {
   const seconds = Math.max(0, Math.floor(Number(milliseconds || 0) / 1000));
@@ -100,6 +171,7 @@ async function runPlaybackCommand(action) {
 }
 
 async function loadCurrentPlayback() {
+  if (!musicApiUrl) return false;
   try {
     const response = await fetch(`${musicApiUrl}/music/playback`);
     if (!response.ok) return false;
@@ -119,6 +191,10 @@ function fillLocation(location) {
 }
 
 async function loadLocation() {
+  if (!locationApiUrl) {
+    elements["location-status"].textContent = "Selecciona primero un servidor disponible.";
+    return false;
+  }
   try {
     const response = await fetch(locationApiUrl);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -247,6 +323,10 @@ function renderMusicDestinations() {
 }
 
 async function loadMusicDestinations({ discover = false } = {}) {
+  if (!musicApiUrl) {
+    elements["music-destinations-status"].textContent = "Selecciona primero un servidor disponible.";
+    return false;
+  }
   elements["music-destinations-status"].textContent = discover ? "Buscando reproductores…" : "Cargando destinos…";
   elements["discover-music-destinations"].disabled = true;
   try {
@@ -479,16 +559,22 @@ function updateAudioSummaries() {
 
 async function loadAudio() {
   elements["audio-status"].textContent = "Buscando dispositivos…";
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8_000);
   try {
-    const response = await fetch(audioApiUrl);
+    const response = await fetch(audioApiUrl, { signal: controller.signal });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     audioState = await response.json();
     elements["audio-status"].textContent = "";
     updateAudioSummaries();
     return true;
   } catch (error) {
-    elements["audio-status"].textContent = "No se pudo conectar con el servicio de audio del satélite.";
+    elements["audio-status"].textContent = error.name === "AbortError"
+      ? "La búsqueda de dispositivos tardó demasiado. Intenta nuevamente."
+      : "No se pudo conectar con el servicio de audio del satélite.";
     return false;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -628,13 +714,39 @@ async function openVoices() {
   }
 }
 
-function connect() {
+function reconnectDisplaySocket() {
+  displaySocketGeneration += 1;
+  clearTimeout(displayReconnectTimer);
+  displayReconnectTimer = null;
+  if (displaySocket) {
+    const previous = displaySocket;
+    displaySocket = null;
+    previous.close();
+  }
+  connect(displaySocketGeneration);
+}
+
+async function connect(generation = displaySocketGeneration) {
   let listeningGeneration = 0;
-  const protocol = location.protocol === "https:" ? "wss" : "ws";
-  const host = location.hostname || "localhost";
-  const socket = new WebSocket(`${protocol}://${host}:3000/ws`);
+  if (!serverState?.selected) await loadServers();
+  const selected = serverState?.selected;
+  if (!selected || generation !== displaySocketGeneration) {
+    elements.connection.className = "badge text-bg-warning";
+    elements.connection.textContent = serverState?.selectionRequired ? "Selecciona servidor" : "Buscando servidor";
+    displayReconnectTimer = setTimeout(() => { displayReconnectTimer = null; connect(generation); }, 3000);
+    return;
+  }
+  const socket = new WebSocket(selected.webSocketUrl);
+  displaySocket = socket;
   socket.addEventListener("open", () => { elements.connection.className = "badge text-bg-success"; elements.connection.textContent = "Conectado"; });
-  socket.addEventListener("close", () => { elements.connection.className = "badge text-bg-danger"; elements.connection.textContent = "Desconectado"; updateAudioMeter({}); setTimeout(connect, 3000); });
+  socket.addEventListener("close", () => {
+    if (displaySocket === socket) displaySocket = null;
+    if (generation !== displaySocketGeneration) return;
+    elements.connection.className = "badge text-bg-danger";
+    elements.connection.textContent = "Desconectado";
+    updateAudioMeter({});
+    displayReconnectTimer = setTimeout(() => { displayReconnectTimer = null; connect(generation); }, 3000);
+  });
   socket.addEventListener("message", ({ data }) => {
     const event = JSON.parse(data);
     if (event.type === "voice.transcript.received") {
@@ -688,7 +800,11 @@ function connect() {
 
 document.querySelectorAll("[data-screen]").forEach((button) => button.addEventListener("click", async () => {
   showScreen(button.dataset.screen);
-  if (button.dataset.screen === "settings-screen") await Promise.all([loadAudio(), loadAssistantConfig(), loadLocation(), loadMusicDestinations()]);
+  if (button.dataset.screen === "settings-screen") {
+    await loadServers();
+    await Promise.all([loadAudio(), loadAssistantConfig(), loadLocation(), loadMusicDestinations()]);
+  }
+  if (button.dataset.screen === "server-screen") await loadServers();
   if (button.dataset.screen === "assistant-screen") await loadAssistantConfig();
   if (button.dataset.screen === "voice-screen") await openVoices();
   if (button.dataset.screen === "location-screen") await loadLocation();
@@ -703,6 +819,11 @@ elements["assistant-form"].addEventListener("submit", saveAssistantName);
 elements["location-form"].addEventListener("submit", saveLocation);
 elements["detect-location"].addEventListener("click", detectLocation);
 elements["discover-music-destinations"].addEventListener("click", discoverSpotifyDevices);
+elements["discover-servers"].addEventListener("click", async () => {
+  elements["discover-servers"].disabled = true;
+  await loadServers({ refresh: true });
+  elements["discover-servers"].disabled = false;
+});
 elements["music-destination-form"].addEventListener("submit", saveMusicDestination);
 elements["music-destination-active"].addEventListener("click", setActiveMusicDestination);
 elements["spotify-connect-form"].addEventListener("submit", saveSpotifyConfig);
@@ -717,7 +838,10 @@ elements["playback-cover"].addEventListener("error", () => {
   elements["playback-cover"].classList.remove("visible");
   elements["playback-cover-placeholder"].classList.remove("hidden");
 });
-void loadCurrentPlayback();
+void (async () => {
+  await loadServers();
+  await loadCurrentPlayback();
+  connect();
+})();
 setInterval(() => void loadCurrentPlayback(), 5000);
 setInterval(updatePlaybackProgress, 1000);
-connect();

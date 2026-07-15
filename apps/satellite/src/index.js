@@ -13,16 +13,19 @@ import {
   validateAssistantNameWithVosk,
   writeAssistantConfig
 } from "./config/assistant-config.js";
+import { ServerDiscovery } from "./discovery/server-discovery.js";
+import { ServerSelection, serverFromManualUrl } from "./discovery/server-selection.js";
 
-const serverUrl = env("SERVER_URL", "ws://localhost:3000/ws");
+const configuredServerUrl = process.env.SERVER_URL?.trim() || null;
+const configuredSpeechToTextUrl = process.env.SPEECH_TO_TEXT_URL?.trim() || null;
 const satellite = { id: env("SATELLITE_ID", "simulator-1"), room: env("SATELLITE_ROOM", "development") };
 const audioApiPort = Number(env("AUDIO_API_PORT", "3200"));
 const audioConfigPath = env("AUDIO_CONFIG_PATH", "dev/satellite/config/audio.json");
 const assistantConfigPath = env("ASSISTANT_CONFIG_PATH", "dev/satellite/config/assistant.json");
+const satelliteServerConfigPath = env("SERVER_CONFIG_PATH", "dev/satellite/config/server.json");
 const defaultAudioConfig = { inputDeviceId: null, inputChannel: null, outputDeviceId: null, ttsVoiceId: null };
 const audioDeviceProvider = createAudioDeviceProvider();
 const textToSpeechProvider = createTextToSpeechProvider(jsonLog);
-const speechToTextUrl = env("SPEECH_TO_TEXT_URL", "http://localhost:3000/stt/transcribe");
 const wakeWordProvider = env("WAKE_WORD_PROVIDER", "vosk");
 const commandWindowMs = Number(env("WAKE_WORD_COMMAND_TIMEOUT_MS", "7000"));
 const wakeWordMinConfidence = Number(env("WAKE_WORD_MIN_CONFIDENCE", "0.82"));
@@ -32,11 +35,23 @@ const voskOptions = {
   modelPath: env("VOSK_MODEL_PATH", "dev/satellite/models/vosk-model-small-es-0.42")
 };
 let activeSocket = null;
+let activeServer = null;
+let reconnectTimer = null;
+let connectionGeneration = 0;
 let activationExpiresAt = 0;
 let dedicatedWakeWordActive = false;
 let wakeWordDetector = null;
 let voiceCapture = null;
 let assistantConfig = await readAssistantConfig(assistantConfigPath, jsonLog);
+const manualServer = configuredServerUrl ? serverFromManualUrl(configuredServerUrl, configuredSpeechToTextUrl) : null;
+const serverDiscovery = new ServerDiscovery({ log: jsonLog });
+const serverSelection = new ServerSelection({
+  discovery: serverDiscovery,
+  configPath: satelliteServerConfigPath,
+  manualServer,
+  log: jsonLog,
+  onSelected: (server) => applySelectedServer(server)
+});
 
 function sendListeningEnded(reason) {
   activationExpiresAt = 0;
@@ -108,7 +123,7 @@ function sendJson(response, status, body) {
   response.writeHead(status, {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Headers": "Content-Type",
-    "Access-Control-Allow-Methods": "GET, PUT, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, PUT, POST, OPTIONS",
     "Content-Type": "application/json"
   });
   response.end(JSON.stringify(body));
@@ -126,6 +141,23 @@ async function readJsonBody(request) {
 async function handleAudioApi(request, response) {
   if (request.method === "OPTIONS") return sendJson(response, 204, {});
   const url = new URL(request.url, "http://localhost");
+
+  if (request.method === "GET" && (url.pathname === "/server" || url.pathname === "/servers")) {
+    return sendJson(response, 200, serverSelection.state());
+  }
+
+  if (request.method === "POST" && url.pathname === "/servers/discover") {
+    return sendJson(response, 200, serverSelection.refresh());
+  }
+
+  if (request.method === "PUT" && url.pathname === "/server") {
+    try {
+      const update = await readJsonBody(request);
+      return sendJson(response, 200, await serverSelection.select(update.id));
+    } catch (error) {
+      return sendJson(response, 422, { error: "invalid_server", message: error.message });
+    }
+  }
 
   if (request.method === "GET" && url.pathname === "/assistant") {
     return sendJson(response, 200, { config: assistantConfig, provider: wakeWordProvider });
@@ -246,7 +278,8 @@ voiceCapture = new VoiceCapture({
     // La ventana se consume antes de llamar al STT: nunca puede procesar más de
     // una frase ni ser extendida por ruido mientras la solicitud está en curso.
     if (detectedByWakeWord) activationExpiresAt = 0;
-    const response = await fetch(speechToTextUrl, {
+    if (!activeServer) throw new Error("No hay un servidor del asistente seleccionado y disponible");
+    const response = await fetch(activeServer.speechToTextUrl, {
       method: "POST",
       headers: {
         "Content-Type": "audio/wav",
@@ -310,18 +343,44 @@ function enqueueSpeech(text, { expectsReply = false, followUpTimeoutMs = 5000 } 
 voiceCapture.start();
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.once(signal, () => {
+    clearTimeout(reconnectTimer);
+    serverSelection.stop();
+    activeSocket?.close();
     voiceCapture.stop();
     wakeWordDetector?.stop();
     setTimeout(() => process.exit(0), 250);
   });
 }
 
-function connect() {
-  const socket = new WebSocket(serverUrl);
+function applySelectedServer(server) {
+  activeServer = server;
+  connectionGeneration += 1;
+  clearTimeout(reconnectTimer);
+  reconnectTimer = null;
+  if (activeSocket) {
+    const previous = activeSocket;
+    activeSocket = null;
+    previous.close();
+  }
+  if (server) connect(server, connectionGeneration);
+  else jsonLog("warn", "Esperando selección o descubrimiento de un servidor");
+}
+
+function scheduleReconnect(server, generation) {
+  if (generation !== connectionGeneration || activeServer?.id !== server.id || reconnectTimer) return;
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connect(server, generation);
+  }, 3000);
+}
+
+function connect(server, generation = connectionGeneration) {
+  if (!server || generation !== connectionGeneration) return;
+  const socket = new WebSocket(server.webSocketUrl);
   activeSocket = socket;
 
   socket.on("open", () => {
-    jsonLog("info", "Satélite conectado", { serverUrl, ...satellite });
+    jsonLog("info", "Satélite conectado", { serverId: server.id, serverUrl: server.webSocketUrl, ...satellite });
     socket.send(JSON.stringify(createEvent(EventType.SATELLITE_CONNECTED, satellite, satellite.id)));
   });
 
@@ -346,7 +405,7 @@ function connect() {
   socket.on("close", () => {
     if (activeSocket === socket) activeSocket = null;
     jsonLog("warn", "Satélite desconectado; reintentando");
-    setTimeout(connect, 3000);
+    scheduleReconnect(server, generation);
   });
 
   const heartbeat = setInterval(() => {
@@ -357,4 +416,4 @@ function connect() {
   socket.on("close", () => clearInterval(heartbeat));
 }
 
-connect();
+await serverSelection.start();

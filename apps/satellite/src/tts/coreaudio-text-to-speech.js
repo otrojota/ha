@@ -10,7 +10,7 @@ export class CoreAudioTextToSpeech extends TextToSpeechProvider {
   }
 
   async listVoices() {
-    const { stdout } = await execFileAsync("say", ["-v", "?"], { timeout: 5000 });
+    const { stdout } = await execFileAsync("say", ["-v", "?"], { timeout: 5000, killSignal: "SIGKILL" });
     const voices = stdout.split("\n").flatMap((line) => {
       const match = line.match(/^(.+?)\s+([a-z]{2}_[A-Z]{2})\s+#/);
       if (!match || !match[2].startsWith("es_")) return [];

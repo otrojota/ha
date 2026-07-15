@@ -29,6 +29,14 @@ Abre `http://localhost:8080`. El servidor queda en `http://localhost:3000` y Mus
 
 El satélite emite eventos de presencia periódicos y captura frases desde el micrófono configurado. El backend usa Whisper para reconocerlas y sólo publica en el display las solicitudes iniciadas por la palabra de activación configurada.
 
+## Descubrimiento del servidor
+
+El backend anuncia automáticamente `_ha-assistant._tcp.local` mediante mDNS/DNS-SD. Cada host conserva una identidad UUID propia en `dev/server/config/identity-<hostname>.json`, por lo que los satélites pueden reconocerlo aunque DHCP cambie su IP y dos servidores ejecuten el mismo repositorio compartido.
+
+El satélite descubre servidores en la red local. Si encuentra uno y no existe una selección previa lo elige automáticamente; si encuentra varios, el display permite elegir uno en **Configuración → Servidor**. La selección se persiste en `dev/satellite/config/server.json`. `SERVER_URL=ws://host:3000/ws` agrega un fallback manual a la lista sin ocultar los servidores mDNS.
+
+Servidor y satélites deben compartir la misma red de capa 2 y permitir mDNS por UDP 5353. En una VM de desarrollo debe usarse red puenteada. El satélite deriva WebSocket y STT del servidor elegido; el display usa además esa dirección para las APIs remotas del backend y Music Gateway.
+
 ## Desarrollo separado de servidor y satélite
 
 Los entornos de `dev/server` y `dev/satellite` usan procesos nativos para poder acceder al hardware de audio del equipo. Cada uno carga su propio archivo `.env`:

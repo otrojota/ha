@@ -13,6 +13,7 @@
     "@ha/contracts": "0.1.0",
     "@ha/shared": "0.1.0",
     "@mozilla/readability": "^0.6.0",
+    "bonjour-service": "^1.3.0",
     "linkedom": "^0.18.13",
     "ws": "^8.18.0"
   }
