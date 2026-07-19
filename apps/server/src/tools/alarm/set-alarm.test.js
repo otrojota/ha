@@ -34,7 +34,8 @@ test("programa una cuenta regresiva relativa para el satélite actual", async ()
   });
 
   assert.equal(scheduledDelay, 1_800_000);
-  assert.equal(result.scheduledFor, "2026-07-14T16:30:00.000Z");
+  assert.equal(result.scheduledFor, "2026-07-14T12:30:00-04:00");
+  assert.equal(result.scheduledForUtc, "2026-07-14T16:30:00.000Z");
   assert.equal(result.messageAtFire, "Terminó la cuenta regresiva: sacar el pan.");
   await timerCallback();
   assert.equal(fired[0].satelliteId, "cocina");
@@ -51,7 +52,8 @@ test("acepta una alarma absoluta sólo cuando incluye zona horaria", async () =>
   const context = { satelliteId: "living", timeZone: "America/Santiago", now: () => now };
 
   const result = await tool.execute({ triggerAt: "2026-07-14T13:30:00-04:00", kind: "alarm" }, context);
-  assert.equal(result.scheduledFor, "2026-07-14T17:30:00.000Z");
+  assert.equal(result.scheduledFor, "2026-07-14T13:30:00-04:00");
+  assert.equal(result.scheduledForUtc, "2026-07-14T17:30:00.000Z");
   await assert.rejects(
     tool.execute({ triggerAt: "2026-07-14T13:30:00", kind: "alarm" }, context),
     /incluir Z o un desfase/
@@ -128,6 +130,9 @@ test("lista y cancela únicamente alarmas del satélite actual", async () => {
     const listed = await listTool.execute({}, { satelliteId: "living", timeZone: "America/Santiago" });
     assert.equal(listed.count, 1);
     assert.equal(listed.alarms[0].id, livingAlarm.id);
+    assert.equal(listed.alarms[0].scheduledFor, "2026-07-14T12:10:00-04:00");
+    assert.equal(listed.alarms[0].scheduledForUtc, "2026-07-14T16:10:00.000Z");
+    assert.equal(listed.alarms[0].localTime, "12:10");
 
     const inaccessible = await cancelTool.execute({ alarmId: kitchenAlarm.id }, { satelliteId: "living" });
     assert.equal(inaccessible.success, false);
@@ -147,6 +152,17 @@ test("lista y cancela únicamente alarmas del satélite actual", async () => {
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("lista la hora local del aviso y no la hora UTC", async () => {
+  const scheduler = {
+    list: () => [{ id: "aviso-1", kind: "reminder", label: "prueba", scheduledFor: "2026-07-18T21:11:00.000Z" }]
+  };
+  const tool = createListAlarmsTool({ scheduler });
+  const result = await tool.execute({}, { satelliteId: "living", timeZone: "America/Santiago", locale: "es-CL" });
+  assert.equal(result.alarms[0].scheduledFor, "2026-07-18T17:11:00-04:00");
+  assert.equal(result.alarms[0].localTime, "17:11");
+  assert.equal(result.alarms[0].scheduledForUtc, "2026-07-18T21:11:00.000Z");
 });
 
 test("calcula cuánto falta para la próxima alarma y para una etiqueta específica", async () => {
@@ -170,4 +186,31 @@ test("calcula cuánto falta para la próxima alarma y para una etiqueta específ
   assert.equal(specific.found, true);
   assert.equal(specific.alarms[0].remainingSeconds, 5400);
   assert.equal(specific.alarms[0].remainingText, "1 hora y 30 minutos");
+});
+
+test("una automatización diaria se ejecuta y queda programada para el día siguiente", async () => {
+  let current = new Date("2026-07-15T00:00:00.000Z");
+  const timers = [];
+  const fired = [];
+  const scheduler = new AlarmScheduler({
+    now: () => current,
+    setTimer: (callback, delay) => {
+      timers.push({ callback, delay });
+      return { unref() {} };
+    },
+    clearTimer() {},
+    onFire: async (alarm) => fired.push(alarm.id)
+  });
+  const alarm = await scheduler.schedule({
+    satelliteId: "living",
+    triggerAt: new Date("2026-07-15T00:00:01.000Z"),
+    kind: "automation",
+    actions: [{ type: "light_turn_on", target: "Luz 1" }],
+    recurrence: { frequency: "daily", localTime: "20:00", timeZone: "America/Santiago" }
+  });
+  current = new Date("2026-07-15T00:00:01.000Z");
+  await timers[0].callback();
+  assert.deepEqual(fired, [alarm.id]);
+  assert.equal(scheduler.list("living")[0].scheduledFor, "2026-07-16T00:00:00.000Z");
+  assert.equal(timers.length, 2);
 });

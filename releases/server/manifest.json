@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "component": "server",
+  "version": "0.1.22",
+  "requirements": {
+    "node": ">=20.19.0",
+    "docker": ">=27.0.0",
+    "dockerCompose": "required",
+    "ollama": "optional; >=0.32.0 when installed locally",
+    "whisperCli": ">=1.9.1"
+  },
+  "models": {
+    "ollama": "qwen3.5:9b",
+    "whisper": "ggml-small.bin"
+  },
+  "containers": {
+    "musicAssistant": "ghcr.io/music-assistant/server:2.8.8",
+    "searxng": "searxng/searxng:2026.7.10-4abac08de"
+  },
+  "artifacts": [
+    "linux-x64",
+    "linux-arm64"
+  ],
+  "supportedSystems": [
+    "Fedora",
+    "Fedora Asahi Remix",
+    "Raspberry Pi OS Lite 64-bit"
+  ]
+}

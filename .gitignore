@@ -3,6 +3,8 @@ node_modules/
 coverage/
 build/
 .cache/
+releases/dist/
+releases/work/
 
 # Variables de entorno locales. Sólo se versionan plantillas sanitizadas.
 .env
@@ -30,9 +32,12 @@ npm-debug.log*
 
 # Configuración y estado persistente de esta instalación
 dev/server/config/alarms.json
+dev/server/config/devices.json
+dev/server/home-assistant/config/
 dev/server/config/music.json
 dev/server/config/music-credits.json
 dev/server/config/music-assistant-credentials.json
+dev/server/config/secrets.json
 dev/server/config/server.json
 dev/server/config/identity*.json
 dev/satellite/config/assistant.json

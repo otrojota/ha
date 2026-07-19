@@ -13,29 +13,39 @@
       <section id="home-screen" class="screen active">
         <header class="d-flex justify-content-between align-items-start">
           <div><div id="clock" class="display-1 fw-light">--:--</div><div id="date" class="lead text-secondary"></div></div>
+          <button id="manual-listen" class="manual-listen-button" type="button" aria-label="Escuchar comando" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Zm6-3a6 6 0 0 1-12 0M12 18v3m-3 0h6"/></svg></button>
           <div class="d-flex align-items-start gap-3">
-            <div class="text-end"><span id="connection" class="badge text-bg-warning">Conectando</span><div class="weather-current mt-2"><span id="weather-icon" class="weather-icon" role="img" aria-label="Estado del clima">🌡️</span><span id="weather">--°</span></div><div id="weather-condition" class="text-secondary">Esperando datos…</div><div id="moon-phase" class="moon-phase text-secondary"><span id="moon-icon" role="img" aria-label="Fase lunar">🌑</span> <span id="moon-phase-name">Fase lunar</span></div></div>
+            <div class="text-end"><span id="connection" class="badge text-bg-warning">Conectando</span><div class="weather-current mt-2"><span id="weather-icon" class="weather-icon" role="img" aria-label="Estado del clima"></span><span id="weather">--°</span></div><div id="weather-condition" class="text-secondary">Esperando datos…</div><div id="moon-phase" class="moon-phase text-secondary"><span id="moon-icon" role="img" aria-label="Fase lunar">🌑</span> <span id="moon-phase-name">Fase lunar</span></div></div>
             <button class="icon-button" data-screen="settings-screen" aria-label="Abrir configuración">⚙</button>
           </div>
         </header>
-        <div class="row g-4 my-auto">
+        <div class="home-content row g-4 my-auto">
           <div class="col-md-6"><article class="panel playback-panel p-4 h-100"><div class="playback-cover-wrap"><img id="playback-cover" class="playback-cover" alt="Portada de la reproducción actual"><div id="playback-cover-placeholder" class="playback-cover-placeholder" aria-hidden="true">♫</div></div><div class="playback-info"><div class="text-secondary">Reproducción actual</div><h2 id="track">Sin reproducción</h2><div id="playback-artists" class="playback-artists"></div><div id="playback-album" class="playback-album"></div><div id="device" class="playback-device">Dispositivo: --</div><div class="playback-progress" aria-label="Progreso"><div id="playback-progress-bar"></div></div><div id="playback-time" class="playback-time"></div><div class="playback-volume"><span aria-hidden="true">🔈</span><input id="playback-volume" type="range" min="0" max="100" step="1" value="50" aria-label="Volumen del destino activo" disabled><output id="playback-volume-value" for="playback-volume">--</output></div><div class="playback-controls" aria-label="Controles de reproducción"><button id="playback-previous" class="playback-control" type="button" aria-label="Canción anterior">◀▮</button><button id="playback-toggle" class="playback-control primary" type="button" aria-label="Reproducir" disabled>▶</button><button id="playback-next" class="playback-control" type="button" aria-label="Siguiente canción">▮▶</button></div><div id="playback-controls-status" class="playback-controls-status" role="status" aria-live="polite"></div></div></article></div>
-          <div class="col-md-6"><article class="panel p-4 h-100"><div class="text-secondary">Conversación</div><p id="transcript" class="fs-5">Esperando voz…</p><p id="response" class="fs-3" role="status" aria-live="polite">Hola, estoy listo.</p><div class="audio-meter" aria-label="Nivel del micrófono"><div class="audio-meter-header"><span>Micrófono</span><span id="audio-level-db">−60 dB</span></div><div class="audio-meter-track"><div id="audio-level-bar" class="audio-meter-bar"></div><div id="audio-level-peak" class="audio-meter-peak"></div></div></div></article></div>
+          <div class="col-md-6"><article id="conversation-panel" class="panel conversation-panel p-4 h-100"><div class="conversation-heading"><div class="text-secondary">Conversación</div><div id="listening-indicator" class="listening-indicator" role="status" aria-live="assertive" aria-hidden="true"><span class="listening-mic" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Zm6-3a6 6 0 0 1-12 0M12 18v3m-3 0h6"/></svg></span><span id="listening-label">Te escucho</span></div></div><p id="transcript" class="fs-5">Esperando voz…</p><p id="response" class="fs-3" role="status" aria-live="polite">Hola, estoy listo.</p><div class="audio-meter" aria-label="Nivel del micrófono"><div class="audio-meter-header"><span>Micrófono</span><span id="audio-level-db">−60 dB</span></div><div class="audio-meter-track"><div id="audio-level-bar" class="audio-meter-bar"></div><div id="audio-level-peak" class="audio-meter-peak"></div></div></div></article></div>
         </div>
       </section>
 
       <section id="settings-screen" class="screen">
-        <header class="screen-header"><button class="back-button" data-screen="home-screen">‹</button><div><div class="eyebrow">Sistema</div><h1>Configuración</h1></div></header>
+        <header class="screen-header"><button class="back-button" data-screen="home-screen">‹</button><div><div class="eyebrow">Satélite</div><h1>Configuración</h1></div></header>
         <div class="settings-groups">
-          <section class="settings-group" aria-labelledby="general-settings-title">
-            <h2 id="general-settings-title">Configuración general</h2>
+          <section class="settings-group" aria-labelledby="assistant-settings-title">
+            <h2 id="assistant-settings-title">Asistente</h2>
             <div class="settings-list">
-              <button class="setting-card" data-screen="server-screen"><span class="setting-icon">🖥</span><span><strong>Servidor</strong><small id="server-summary">Buscando…</small></span><span class="chevron">›</span></button>
-              <button class="setting-card" data-screen="assistant-screen"><span class="setting-icon">✨</span><span><strong>Nombre del asistente</strong><small id="assistant-summary">Asistente</small></span><span class="chevron">›</span></button>
-              <button class="setting-card" data-screen="location-screen"><span class="setting-icon">📍</span><span><strong>Ubicación</strong><small id="location-summary">Sin configurar</small></span><span class="chevron">›</span></button>
-              <button class="setting-card" data-screen="music-assistant-screen"><span class="setting-icon">♫</span><span><strong>Music Assistant</strong><small id="music-assistant-summary">Comprobando…</small></span><span class="chevron">›</span></button>
-              <button class="setting-card" data-screen="music-sources-screen"><span class="setting-icon">◉</span><span><strong>Orígenes de música</strong><small id="music-sources-menu-summary">Sin explorar</small></span><span class="chevron">›</span></button>
-              <button class="setting-card" data-screen="music-destinations-screen"><span class="setting-icon">🎵</span><span><strong>Destinos de música</strong><small id="music-destinations-summary">Sin explorar</small></span><span class="chevron">›</span></button>
+              <button class="setting-card" data-screen="assistant-screen"><span class="setting-icon">🎙</span><span><strong>Nombre y activación</strong><small id="assistant-summary">Asistente</small></span><span class="chevron">›</span></button>
+              <button class="setting-card" data-screen="voice-screen"><span class="setting-icon">🗣</span><span><strong>Voz del asistente</strong><small id="voice-summary">Automática</small></span><span class="chevron">›</span></button>
+            </div>
+          </section>
+          <section class="settings-group" aria-labelledby="music-settings-title">
+            <h2 id="music-settings-title">Música</h2>
+            <div class="settings-list">
+              <button class="setting-card" data-screen="music-sources-screen"><span class="setting-icon">◉</span><span><strong>Origen activo</strong><small id="music-sources-menu-summary">Sin explorar</small></span><span class="chevron">›</span></button>
+              <button class="setting-card" data-screen="music-destinations-screen"><span class="setting-icon">🔊</span><span><strong>Destino activo</strong><small id="music-destinations-summary">Sin explorar</small></span><span class="chevron">›</span></button>
+            </div>
+          </section>
+          <section class="settings-group" aria-labelledby="home-settings-title">
+            <h2 id="home-settings-title">Hogar</h2>
+            <div class="settings-list">
+              <button id="home-automation-setting" class="setting-card" data-screen="home-devices-screen"><span class="setting-icon">⌂</span><span><strong>Dispositivos de Home Assistant</strong><small id="home-devices-summary">Comprobando…</small></span><span class="chevron">›</span></button>
             </div>
           </section>
           <section class="settings-group" aria-labelledby="audio-settings-title">
@@ -43,15 +53,40 @@
             <div class="settings-list">
               <button class="setting-card" data-audio-kind="input"><span class="setting-icon">🎙</span><span><strong>Audio de entrada</strong><small id="input-summary">Sin configurar</small></span><span class="chevron">›</span></button>
               <button class="setting-card" data-audio-kind="output"><span class="setting-icon">🔊</span><span><strong>Audio de salida</strong><small id="output-summary">Sin configurar</small></span><span class="chevron">›</span></button>
-              <button class="setting-card" data-screen="voice-screen"><span class="setting-icon">🗣</span><span><strong>Voz del asistente</strong><small id="voice-summary">Automática</small></span><span class="chevron">›</span></button>
               <button class="setting-card" data-screen="music-player-screen"><span class="setting-icon">♫</span><span><strong>Parlante Music Assistant</strong><small id="music-player-summary">Cargando…</small></span><span class="chevron">›</span></button>
+            </div>
+          </section>
+          <section class="settings-group" aria-labelledby="system-settings-title">
+            <h2 id="system-settings-title">Sistema</h2>
+            <div class="settings-list">
+              <button class="setting-card" data-screen="server-settings-screen"><span class="setting-icon">🖥</span><span><strong>Configurar servidor</strong><small id="server-summary">Buscando…</small></span><span class="chevron">›</span></button>
+              <button class="setting-card" data-screen="system-info-screen"><span class="setting-icon">ⓘ</span><span><strong>Información del satélite</strong><small id="system-info-summary">Cargando…</small></span><span class="chevron">›</span></button>
             </div>
           </section>
         </div>
       </section>
 
+      <section id="server-settings-screen" class="screen">
+        <header class="screen-header"><button class="back-button" data-screen="settings-screen">‹</button><div><div class="eyebrow">Servidor</div><h1>Configuración del servidor</h1></div></header>
+        <p class="text-secondary fs-5">Estas opciones se comparten con los satélites que usan el servidor seleccionado.</p>
+        <div class="settings-list">
+          <button class="setting-card" data-screen="server-screen"><span class="setting-icon">🔗</span><span><strong>Servidor seleccionado</strong><small>Descubrimiento y conexión</small></span><span class="chevron">›</span></button>
+          <button class="setting-card" data-screen="llm-screen"><span class="setting-icon">🧠</span><span><strong>Modelo de lenguaje</strong><small id="llm-summary">Cargando…</small></span><span class="chevron">›</span></button>
+          <button class="setting-card" data-screen="location-screen"><span class="setting-icon">📍</span><span><strong>Ubicación</strong><small id="location-summary">Sin configurar</small></span><span class="chevron">›</span></button>
+          <button class="setting-card" data-screen="music-assistant-screen"><span class="setting-icon">♫</span><span><strong>Music Assistant</strong><small id="music-assistant-summary">Comprobando…</small></span><span class="chevron">›</span></button>
+          <button class="setting-card" data-screen="home-assistant-screen"><span class="setting-icon">⌂</span><span><strong>Conexión Home Assistant</strong><small>URL y credencial</small></span><span class="chevron">›</span></button>
+        </div>
+      </section>
+
+      <section id="system-info-screen" class="screen">
+        <header class="screen-header"><button class="back-button" data-screen="settings-screen">‹</button><div><div class="eyebrow">Satélite</div><h1>Información del sistema</h1></div></header>
+        <div id="system-info-status" class="status-message" role="status"></div>
+        <div id="system-info-grid" class="system-info-grid" aria-live="polite"></div>
+        <div class="destination-actions mt-3"><button id="refresh-system-info" class="save-button secondary" type="button">Actualizar información</button></div>
+      </section>
+
       <section id="server-screen" class="screen">
-        <header class="screen-header"><button class="back-button" data-screen="settings-screen">‹</button><div><div class="eyebrow">Sistema</div><h1>Seleccionar servidor</h1></div></header>
+        <header class="screen-header"><button class="back-button" data-screen="server-settings-screen">‹</button><div><div class="eyebrow">Sistema</div><h1>Seleccionar servidor</h1></div></header>
         <p class="text-secondary fs-5">Los servidores disponibles se descubren automáticamente en la red local. Si sólo hay uno, se selecciona sin intervención.</p>
         <div class="destination-actions"><button id="discover-servers" class="save-button secondary" type="button">Buscar nuevamente</button></div>
         <div id="server-status" class="status-message mt-3" role="status"></div>
@@ -59,11 +94,12 @@
       </section>
 
       <section id="assistant-screen" class="screen">
-        <header class="screen-header"><button class="back-button" data-screen="settings-screen">‹</button><div><div class="eyebrow">Asistente</div><h1>Cambiar nombre</h1></div></header>
+        <header class="screen-header"><button class="back-button" data-screen="settings-screen">‹</button><div><div class="eyebrow">Asistente</div><h1>Nombre y activación</h1></div></header>
         <p class="text-secondary fs-5">Este nombre será también la palabra que activa al asistente. Debe existir en el vocabulario español.</p>
         <form id="assistant-form" class="assistant-form">
           <label for="assistant-name" class="form-label fs-5">Nombre o frase de activación</label>
           <input id="assistant-name" class="assistant-name-input" name="name" type="text" minlength="2" maxlength="40" autocomplete="off" required>
+          <label class="switch-row"><span><strong>Activación por nombre</strong><small>Escucha continuamente la palabra de activación. Desactívala para ahorrar CPU y memoria; el botón de micrófono seguirá disponible.</small></span><input id="wake-word-enabled" type="checkbox" role="switch" checked></label>
           <button class="save-button" type="submit">Validar y guardar</button>
         </form>
         <div id="assistant-status" class="status-message mt-3" role="status"></div>
@@ -94,7 +130,6 @@
         <header class="screen-header"><button class="back-button" data-screen="settings-screen">‹</button><div><div class="eyebrow">Audio</div><h1>Parlante Music Assistant</h1></div></header>
         <p class="text-secondary fs-5">El satélite se anuncia en Music Assistant mediante Sendspin. Esta salida es independiente de la voz TTS.</p>
         <form id="music-player-form" class="destination-form">
-          <label>Nombre visible en Music Assistant<input id="music-player-name" class="assistant-name-input" maxlength="80" required></label>
           <label>Dispositivo de salida Sendspin<input id="music-player-output" type="hidden"></label>
           <div id="music-player-output-list" class="device-list compact-list" aria-label="Dispositivo de salida Sendspin"></div>
           <label class="switch-row"><span><strong>Exponer este satélite</strong><small>Permite que Music Assistant lo use como destino.</small></span><input id="music-player-enabled" type="checkbox" role="switch"></label>
@@ -104,7 +139,7 @@
       </section>
 
       <section id="location-screen" class="screen">
-        <header class="screen-header"><button class="back-button" data-screen="settings-screen">‹</button><div><div class="eyebrow">Servidor</div><h1>Ubicación</h1></div></header>
+        <header class="screen-header"><button class="back-button" data-screen="server-settings-screen">‹</button><div><div class="eyebrow">Servidor</div><h1>Ubicación</h1></div></header>
         <p class="text-secondary fs-5">Se usa para clima, pronóstico y consultas locales. La detección por IP es sólo aproximada.</p>
         <form id="location-form" class="location-form">
           <label>Ciudad<input id="location-city" class="assistant-name-input" required></label>
@@ -120,8 +155,35 @@
         <div id="location-status" class="status-message mt-3" role="status"></div>
       </section>
 
+      <section id="llm-screen" class="screen">
+        <header class="screen-header"><button class="back-button" data-screen="server-settings-screen">‹</button><div><div class="eyebrow">Servidor</div><h1>Modelo de lenguaje</h1></div></header>
+        <p class="text-secondary fs-5">La nueva configuración se prueba antes de activarse. Las credenciales se envían al servidor, pero nunca vuelven a mostrarse.</p>
+        <form id="llm-form" class="destination-form">
+          <label>Proveedor
+            <select id="llm-provider" class="assistant-name-input" required>
+              <option value="ollama">Ollama</option>
+              <option value="openai">OpenAI API</option>
+              <option value="github-models">GitHub Models</option>
+              <option value="openai-compatible">API compatible con OpenAI</option>
+            </select>
+          </label>
+          <label id="llm-base-url-field">URL base<input id="llm-base-url" class="assistant-name-input" type="url" required></label>
+          <label>Modelo<input id="llm-model" class="assistant-name-input" autocomplete="off" required></label>
+          <label id="llm-api-key-field">Nueva API key o token<input id="llm-api-key" class="assistant-name-input" type="password" autocomplete="new-password"><small id="llm-credential-status">Sin credencial configurada</small></label>
+          <div class="location-coordinates">
+            <label>Temperatura<input id="llm-temperature" class="assistant-name-input" type="text" data-virtual-keyboard="numeric" inputmode="decimal" required></label>
+            <label id="llm-context-field">Contexto<input id="llm-context-length" class="assistant-name-input" type="text" data-virtual-keyboard="numeric" inputmode="numeric" required></label>
+          </div>
+          <label id="llm-keep-alive-field">Mantener modelo cargado<input id="llm-keep-alive" class="assistant-name-input" placeholder="30m"></label>
+          <label id="llm-think-field" class="switch-row"><span><strong>Razonamiento del modelo</strong><small>Solicita a Ollama habilitar el modo de razonamiento.</small></span><input id="llm-think" type="checkbox" role="switch"></label>
+          <div class="location-actions"><button id="llm-test" class="save-button secondary" type="button">Probar conexión</button><button class="save-button" type="submit">Probar y guardar</button></div>
+          <button id="llm-delete-credential" class="save-button danger" type="button">Eliminar credencial guardada</button>
+        </form>
+        <div id="llm-status" class="status-message mt-3" role="status"></div>
+      </section>
+
       <section id="music-assistant-screen" class="screen">
-        <header class="screen-header"><button class="back-button" data-screen="settings-screen">‹</button><div><div class="eyebrow">Música</div><h1>Conectar Music Assistant</h1></div></header>
+        <header class="screen-header"><button class="back-button" data-screen="server-settings-screen">‹</button><div><div class="eyebrow">Música</div><h1>Conectar Music Assistant</h1></div></header>
         <p class="text-secondary fs-5">Inicia sesión una sola vez. El servidor creará un token exclusivo para Music Gateway y descartará inmediatamente la contraseña.</p>
         <form id="music-assistant-form" class="destination-form">
           <label>Usuario de Music Assistant<input id="music-assistant-username" class="assistant-name-input" autocomplete="username" required></label>
@@ -132,32 +194,38 @@
       </section>
 
       <section id="music-destinations-screen" class="screen">
-        <header class="screen-header"><button class="back-button" data-screen="settings-screen">‹</button><div><div class="eyebrow">Música</div><h1>Destinos</h1></div></header>
-        <p class="text-secondary fs-5">Reproductores disponibles en Music Assistant. Aquí puedes elegir los nombres y habitaciones que entenderá el asistente.</p>
+        <header class="screen-header"><button class="back-button" data-screen="settings-screen">‹</button><div><div class="eyebrow">Música</div><h1>Destino activo</h1></div></header>
+        <p class="text-secondary fs-5">Selecciona el reproductor predeterminado para este satélite. Los nombres y la disponibilidad provienen directamente de Music Assistant.</p>
         <div class="destination-actions"><button id="discover-music-destinations" class="save-button" type="button">Actualizar desde Music Assistant</button></div>
         <div id="music-destinations-status" class="status-message mt-3" role="status"></div>
         <div id="music-destinations-list" class="destination-list"></div>
       </section>
 
       <section id="music-sources-screen" class="screen">
-        <header class="screen-header"><button class="back-button" data-screen="settings-screen">‹</button><div><div class="eyebrow">Música</div><h1>Orígenes</h1></div></header>
+        <header class="screen-header"><button class="back-button" data-screen="settings-screen">‹</button><div><div class="eyebrow">Música</div><h1>Origen activo</h1></div></header>
         <p class="text-secondary fs-5">Servicios y bibliotecas configurados en Music Assistant. El origen seleccionado se usará por defecto en las próximas solicitudes.</p>
         <div id="music-sources-summary" class="destination-detail"></div>
         <div id="music-sources-status" class="status-message" role="status"></div>
         <div id="music-sources-list" class="destination-list"></div>
       </section>
 
-      <section id="music-destination-screen" class="screen">
-        <header class="screen-header"><button class="back-button" data-screen="music-destinations-screen">‹</button><div><div class="eyebrow">Destino</div><h1 id="music-destination-title">Configurar equipo</h1></div></header>
-        <div id="music-destination-detail" class="destination-detail"></div>
-        <form id="music-destination-form" class="destination-form">
-          <label>Nombre para el asistente<input id="music-destination-alias" class="assistant-name-input" maxlength="80" placeholder="Ej: Equipo principal"></label>
-          <label>Habitación<input id="music-destination-room" class="assistant-name-input" maxlength="80" placeholder="Ej: Living"></label>
-          <label class="switch-row"><span><strong>Destino habilitado</strong><small>Permite que el asistente lo seleccione.</small></span><input id="music-destination-enabled" type="checkbox" role="switch"></label>
-          <button id="music-destination-active" class="save-button secondary" type="button">Usar como destino activo</button>
-          <button class="save-button" type="submit">Guardar destino</button>
+      <section id="home-devices-screen" class="screen">
+        <header class="screen-header"><button class="back-button" data-screen="settings-screen">‹</button><div><div class="eyebrow">Hogar</div><h1>Dispositivos de Home Assistant</h1></div></header>
+        <p class="text-secondary fs-5">Vista automática de solo lectura. Los nombres, plantas y habitaciones se administran exclusivamente en Home Assistant.</p>
+        <div id="home-devices-status" class="status-message mt-3" role="status"></div>
+        <div id="home-devices-list" class="destination-list"></div>
+      </section>
+
+      <section id="home-assistant-screen" class="screen">
+        <header class="screen-header"><button class="back-button" data-screen="server-settings-screen">‹</button><div><div class="eyebrow">Servidor</div><h1>Conexión Home Assistant</h1></div></header>
+        <form id="home-assistant-form" class="destination-form integration-form">
+          <p class="text-secondary">El servidor consulta periódicamente dispositivos, plantas y habitaciones usando este token de larga duración.</p>
+          <label>URL de Home Assistant<input id="home-assistant-url" class="assistant-name-input" type="url" value="http://127.0.0.1:8123" required></label>
+          <label>Nuevo token de larga duración<input id="home-assistant-token" class="assistant-name-input" type="password" autocomplete="new-password"><small id="home-assistant-credential-status">Sin token configurado</small></label>
+          <div class="location-actions"><button id="home-assistant-test" class="save-button secondary" type="button">Probar conexión</button><button class="save-button" type="submit">Probar y guardar</button></div>
+          <button id="home-assistant-delete-credential" class="save-button danger" type="button" hidden>Eliminar token de Home Assistant</button>
         </form>
-        <div id="music-destination-status" class="status-message mt-3" role="status"></div>
+        <div id="home-assistant-status" class="status-message mt-3" role="status"></div>
       </section>
 
     </main>

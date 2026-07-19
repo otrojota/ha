@@ -7,6 +7,7 @@ MUSIC_GATEWAY_PID_FILE="$SCRIPT_DIR/.music-gateway.pid"
 OLLAMA_PID_FILE="$SCRIPT_DIR/.ollama.pid"
 SEARXNG_COMPOSE="$SCRIPT_DIR/searxng/compose.yml"
 MUSIC_ASSISTANT_COMPOSE="$SCRIPT_DIR/music-assistant/compose.yml"
+HOME_ASSISTANT_COMPOSE="$SCRIPT_DIR/home-assistant/compose.yml"
 
 if [ -f "$PID_FILE" ]; then
   PID=$(cat "$PID_FILE")
@@ -54,4 +55,6 @@ if command -v docker >/dev/null 2>&1; then
   echo "SearXNG detenido."
   docker compose -f "$MUSIC_ASSISTANT_COMPOSE" down
   echo "Music Assistant detenido."
+  docker compose -f "$HOME_ASSISTANT_COMPOSE" down
+  echo "Home Assistant detenido."
 fi

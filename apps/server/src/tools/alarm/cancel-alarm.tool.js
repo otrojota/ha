@@ -4,7 +4,7 @@ export function createCancelAlarmTool({ scheduler }) {
       type: "function",
       function: {
         name: "alarm_cancel",
-        description: "Cancela una alarma concreta por su ID o todas las alarmas del satélite actual. Si el usuario identifica una alarma por hora o descripción, llama primero a alarm_list y utiliza el ID devuelto. No inventes IDs.",
+        description: "Cancela una alarma, aviso o automatización programada por su ID, o todas las tareas del satélite actual. Si el usuario la identifica por hora o descripción, llama primero a alarm_list y utiliza el ID devuelto. No inventes IDs.",
         parameters: {
           type: "object",
           properties: {
@@ -26,7 +26,7 @@ export function createCancelAlarmTool({ scheduler }) {
       return {
         success: true,
         cancelledCount: cancelled.length,
-        cancelled: cancelled.map((alarm) => ({ id: alarm.id, kind: alarm.kind, label: alarm.label, scheduledFor: alarm.scheduledFor }))
+        cancelled: cancelled.map((alarm) => ({ id: alarm.id, kind: alarm.kind, label: alarm.label, scheduledFor: alarm.scheduledFor, recurrence: alarm.recurrence || null }))
       };
     }
   };

@@ -264,17 +264,18 @@ Formato:
 
 ```json
 {
-  "inputDeviceId": null,
   "inputDeviceIds": [],
   "inputDeviceNames": {},
-  "inputChannel": null,
   "inputChannelsByDevice": {},
-  "outputDeviceId": null,
   "outputDeviceIds": [],
   "outputDeviceNames": {},
   "ttsVoiceId": null
 }
 ```
+
+Los IDs efectivos y el canal activo se calculan al consultar la API; no se
+persisten duplicados. El contrato persistido es estricto y no admite campos de
+versiones anteriores.
 
 `inputChannel` es base cero internamente y base uno en la GUI. La selección de salida TTS no modifica la ruta de música.
 Las listas `inputDeviceIds` y `outputDeviceIds` están ordenadas por prioridad. Cada nueva selección pasa al primer lugar y las anteriores quedan como fallback automático. Los nombres permiten reencontrar dispositivos CoreAudio aunque macOS cambie sus índices; el canal de entrada se conserva por dispositivo.
@@ -379,6 +380,9 @@ Existe un teclado virtual local reutilizable en `apps/display/public/virtual-key
 ## Eventos principales
 
 Definidos en `packages/contracts/src/index.js`:
+
+Todos los eventos incluyen `protocolVersion: "2"`; servidor, satélite y display
+rechazan eventos y anuncios mDNS de protocolos anteriores.
 
 ```text
 satellite.connected

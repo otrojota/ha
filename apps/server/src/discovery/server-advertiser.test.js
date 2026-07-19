@@ -21,5 +21,6 @@ test("publica un nombre técnico único y conserva el nombre amigable en TXT", (
   assert.equal(published.host, "ha-server-36c47af6.local");
   assert.equal(published.txt.name, "Servidor Casa");
   assert.equal(published.txt.id, "36c47af6-efd2-4f3d-b334-606ed6e3d949");
+  assert.equal(published.txt.protocolVersion, "2");
   advertiser.stop();
 });

@@ -1,0 +1,19 @@
+[Unit]
+Description=HA Voice Assistant Music Gateway
+After=network-online.target ha-containers.service
+Wants=network-online.target
+Requires=ha-containers.service
+
+[Service]
+Type=simple
+User=ha
+Group=ha
+WorkingDirectory=/opt/ha/current
+EnvironmentFile=/etc/ha/server.env
+EnvironmentFile=-/etc/ha/server/music-assistant.env
+ExecStart=/usr/bin/node services/music-gateway/src/index.js
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

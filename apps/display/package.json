@@ -1,6 +1,6 @@
 {
   "name": "@ha/display",
-  "version": "0.1.0",
+  "version": "0.1.22",
   "private": true,
   "scripts": {
     "dev": "serve public -l 8080",

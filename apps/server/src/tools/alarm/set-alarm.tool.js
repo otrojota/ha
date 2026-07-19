@@ -1,3 +1,5 @@
+import { alarmLocalTime } from "./alarm-time.js";
+
 const absoluteInstantPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/;
 
 function alarmMessage(kind, label) {
@@ -61,12 +63,12 @@ export function createSetAlarmTool({ scheduler }) {
         kind: args.kind,
         label: args.label
       });
+      const local = alarmLocalTime(alarm.scheduledFor, context.timeZone, context.locale);
       return {
         success: true,
         id: alarm.id,
         kind: alarm.kind,
-        scheduledFor: alarm.scheduledFor,
-        timeZone: context.timeZone,
+        ...local,
         messageAtFire: alarmMessage(alarm.kind, alarm.label)
       };
     }

@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "component": "satellite",
+  "version": "0.1.32",
+  "requirements": {
+    "system": "Raspberry Pi OS Lite 64-bit",
+    "architecture": "arm64",
+    "node": ">=20.19.0",
+    "python": ">=3.9",
+    "audio": "PipeWire",
+    "display": "Wayland/Labwc and Chromium"
+  },
+  "models": {
+    "vosk": "vosk-model-small-es-0.42",
+    "piper": "todas las voces es_* disponibles en el catálogo validado"
+  },
+  "artifacts": ["linux-arm64"]
+}

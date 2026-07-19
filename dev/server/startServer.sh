@@ -11,6 +11,7 @@ MUSIC_GATEWAY_LOG="$SCRIPT_DIR/music-gateway.log"
 OLLAMA_LOG="$SCRIPT_DIR/ollama.log"
 SEARXNG_COMPOSE="$SCRIPT_DIR/searxng/compose.yml"
 MUSIC_ASSISTANT_COMPOSE="$SCRIPT_DIR/music-assistant/compose.yml"
+HOME_ASSISTANT_COMPOSE="$SCRIPT_DIR/home-assistant/compose.yml"
 
 SERVER_ALREADY_RUNNING=false
 if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
@@ -22,17 +23,27 @@ if [ -f "$MUSIC_GATEWAY_PID_FILE" ] && kill -0 "$(cat "$MUSIC_GATEWAY_PID_FILE")
 fi
 
 set -a
-. "$SCRIPT_DIR/.env"
-if [ -f "$SCRIPT_DIR/.env.local" ]; then
-  . "$SCRIPT_DIR/.env.local"
+if [ -f /etc/ha/server.env ]; then
+  . /etc/ha/server.env
+else
+  . "$SCRIPT_DIR/.env"
+  if [ -f "$SCRIPT_DIR/.env.local" ]; then
+    . "$SCRIPT_DIR/.env.local"
+  fi
 fi
-if [ -f "$SCRIPT_DIR/.music-assistant.env" ]; then
+if [ -f /etc/ha/server/music-assistant.env ]; then
+  . /etc/ha/server/music-assistant.env
+elif [ -f "$SCRIPT_DIR/.music-assistant.env" ]; then
   . "$SCRIPT_DIR/.music-assistant.env"
 fi
 set +a
 
 cd "$REPO_ROOT"
-OLLAMA_URL=${OLLAMA_URL:-http://127.0.0.1:11434}
+SERVER_CONFIG_FILE=${SERVER_CONFIG_PATH:-$SCRIPT_DIR/config/server.json}
+LLM_PROVIDER=$(node -e 'const fs=require("fs"); try { const c=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); process.stdout.write(c.llm?.provider||"ollama"); } catch { process.stdout.write("ollama"); }' "$SERVER_CONFIG_FILE")
+OLLAMA_URL=$(node -e 'const fs=require("fs"); try { const c=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); process.stdout.write(c.llm?.baseUrl||process.argv[2]); } catch { process.stdout.write(process.argv[2]); }' "$SERVER_CONFIG_FILE" "${OLLAMA_URL:-http://127.0.0.1:11434}")
+OLLAMA_MODEL=$(node -e 'const fs=require("fs"); try { const c=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); process.stdout.write(c.llm?.model||process.argv[2]); } catch { process.stdout.write(process.argv[2]); }' "$SERVER_CONFIG_FILE" "${OLLAMA_MODEL:-qwen3.5:9b}")
+if [ "$LLM_PROVIDER" = "ollama" ]; then
 OLLAMA_LOCAL=false
 case "$OLLAMA_URL" in
   http://localhost:*|http://127.0.0.1:*|http://\[::1\]:*) OLLAMA_LOCAL=true ;;
@@ -62,10 +73,13 @@ if ! curl -fsS "$OLLAMA_URL/api/tags" >/dev/null 2>&1; then
   exit 1
 fi
 echo "Ollama disponible en $OLLAMA_URL."
-if ! curl -fsS -H 'Content-Type: application/json' -d "{\"model\":\"${OLLAMA_MODEL:-qwen3.5:9b}\"}" "$OLLAMA_URL/api/show" >/dev/null 2>&1; then
-  echo "No se encontró el modelo ${OLLAMA_MODEL:-qwen3.5:9b} en $OLLAMA_URL."
-  echo "Instálalo en esa máquina con: ollama pull ${OLLAMA_MODEL:-qwen3.5:9b}"
+if ! curl -fsS -H 'Content-Type: application/json' -d "{\"model\":\"$OLLAMA_MODEL\"}" "$OLLAMA_URL/api/show" >/dev/null 2>&1; then
+  echo "No se encontró el modelo $OLLAMA_MODEL en $OLLAMA_URL."
+  echo "Instálalo en esa máquina con: ollama pull $OLLAMA_MODEL"
   exit 1
+fi
+else
+  echo "Proveedor LLM externo configurado: $LLM_PROVIDER. Ollama no se iniciará."
 fi
 if ! command -v "${WHISPER_CLI:-whisper-cli}" >/dev/null 2>&1; then
   echo "No se encontró ${WHISPER_CLI:-whisper-cli}. Instala whisper.cpp antes de iniciar el servidor."
@@ -90,6 +104,23 @@ if ! curl -fsS "http://127.0.0.1:8888/search?q=prueba&format=json" >/dev/null 2>
   exit 1
 fi
 echo "SearXNG disponible en http://127.0.0.1:8888"
+HOME_ASSISTANT_ENABLED=$(node -e 'const fs=require("fs"); try { const c=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); process.stdout.write(c.homeAutomation?.homeAssistant?.enabled===true?"true":"false"); } catch { process.stdout.write("false"); }' "$SERVER_CONFIG_FILE")
+if [ "$HOME_ASSISTANT_ENABLED" = "true" ]; then
+docker compose -f "$HOME_ASSISTANT_COMPOSE" up -d
+WAIT=0
+while ! curl -fsS "${HOME_ASSISTANT_URL:-http://127.0.0.1:8123}/" >/dev/null 2>&1 && [ "$WAIT" -lt 120 ]; do
+  sleep 1
+  WAIT=$((WAIT + 1))
+done
+if ! curl -fsS "${HOME_ASSISTANT_URL:-http://127.0.0.1:8123}/" >/dev/null 2>&1; then
+  echo "Home Assistant no pudo iniciarse en ${HOME_ASSISTANT_URL:-http://127.0.0.1:8123}."
+  echo "Revisa: docker compose -f $HOME_ASSISTANT_COMPOSE logs"
+  exit 1
+fi
+echo "Home Assistant disponible en ${HOME_ASSISTANT_URL:-http://127.0.0.1:8123}"
+else
+  echo "Home Assistant no está habilitado en la configuración del servidor; no se instalará ni iniciará."
+fi
 docker compose -f "$MUSIC_ASSISTANT_COMPOSE" up -d
 WAIT=0
 while ! curl -fsS "${MUSIC_ASSISTANT_URL:-http://127.0.0.1:8095}/" >/dev/null 2>&1 && [ "$WAIT" -lt 120 ]; do

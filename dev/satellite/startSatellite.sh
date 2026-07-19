@@ -9,7 +9,11 @@ SATELLITE_LOG="$SCRIPT_DIR/satellite.log"
 DISPLAY_LOG="$SCRIPT_DIR/display.log"
 
 set -a
-. "$SCRIPT_DIR/.env"
+if [ -f /etc/ha/satellite.env ]; then
+  . /etc/ha/satellite.env
+else
+  . "$SCRIPT_DIR/.env"
+fi
 set +a
 
 ensure_sendspin() {

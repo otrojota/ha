@@ -5,9 +5,9 @@ export function createSetActiveMusicSourceTool({ music }) {
       description: "Cambia por nombre el origen musical activo de Music Assistant y lo conserva para futuras reproducciones.",
       parameters: { type: "object", properties: { source: { type: "string" } }, required: ["source"], additionalProperties: false }
     } },
-    async execute({ source }) {
+    async execute({ source }, context = {}) {
       if (!String(source || "").trim()) throw new Error("Indica el origen musical");
-      return music.setActiveSource(source);
+      return music.setActiveSource(source, context.satelliteId);
     }
   };
 }

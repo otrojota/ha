@@ -1,0 +1,17 @@
+[Unit]
+Description=HA Voice Assistant containers
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=/etc/ha/server.env
+WorkingDirectory=/opt/ha/current/deploy/compose
+ExecStart=/usr/bin/docker compose --env-file /etc/ha/server.env up -d
+ExecStop=/usr/bin/docker compose --env-file /etc/ha/server.env down
+TimeoutStartSec=180
+
+[Install]
+WantedBy=multi-user.target

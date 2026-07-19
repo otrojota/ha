@@ -8,13 +8,13 @@ export function createListMusicDestinationsTool({ music }) {
         parameters: { type: "object", properties: {}, additionalProperties: false }
       }
     },
-    async execute(args) {
+    async execute(args, context = {}) {
       if (!args || typeof args !== "object" || Array.isArray(args) || Object.keys(args).length) throw new Error("music_list_destinations no acepta argumentos");
-      const state = await music.getDestinations();
+      const state = await music.getDestinations(context.satelliteId);
       return {
         activeDestinationId: state.activeDestinationId,
         destinations: state.destinations.filter((item) => item.enabled !== false).map((item) => ({
-          id: item.id, name: item.name, alias: item.alias, room: item.room, active: item.active, available: item.available, provider: item.provider
+          id: item.id, name: item.name, active: item.active, available: item.available, provider: item.provider
         }))
       };
     }

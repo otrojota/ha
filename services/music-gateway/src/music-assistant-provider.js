@@ -4,6 +4,20 @@ function normalizeText(value) {
   return String(value || "").normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
+const SPOKEN_NUMBERS = new Map([
+  ["cero", "0"], ["uno", "1"], ["un", "1"], ["una", "1"], ["dos", "2"],
+  ["tres", "3"], ["cuatro", "4"], ["cinco", "5"], ["seis", "6"],
+  ["siete", "7"], ["ocho", "8"], ["nueve", "9"], ["diez", "10"]
+]);
+
+function normalizeRadioName(value) {
+  return normalizeText(value)
+    .replace(/^(?:la )?(?:radio|emisora|estacion) /, "")
+    .split(/\s+/)
+    .map((token) => SPOKEN_NUMBERS.get(token) || token)
+    .join(" ");
+}
+
 function imageUrl(item) {
   const image = item?.metadata?.images?.[0] || item?.image;
   if (!image) return null;
@@ -26,6 +40,51 @@ function proxiedImageUrl(raw) {
 
 function itemName(item) {
   return item?.name || item?.title || item?.media_item?.name || null;
+}
+
+function sameMediaItem(current, selected) {
+  if (!current || !selected) return false;
+  const currentUri = String(current.uri || "").trim();
+  const selectedUri = String(selected.uri || "").trim();
+  if (currentUri && selectedUri) return currentUri === selectedUri;
+  return normalizeText(itemName(current)) === normalizeText(itemName(selected));
+}
+
+function radioSearchQueries(query) {
+  const original = String(query || "").trim();
+  const withoutType = original.replace(/^\s*(?:la\s+)?(?:radio|emisora|estaci[oó]n)\s+/i, "").trim();
+  return [...new Set([original, withoutType].filter(Boolean))];
+}
+
+function radioMatchScore(query, name) {
+  const normalizedQuery = normalizeRadioName(query);
+  const normalizedName = normalizeRadioName(name);
+  if (!normalizedQuery || !normalizedName) return 0;
+  if (normalizedQuery === normalizedName) return 1;
+  const compactQuery = normalizedQuery.replace(/\s+/g, "");
+  const compactName = normalizedName.replace(/\s+/g, "");
+  if (compactQuery === compactName) return 1;
+  if (compactName.includes(compactQuery) || compactQuery.includes(compactName)) return 0.86;
+  return nameSimilarity(query, name);
+}
+
+function similarLibraryRadios(query, radios) {
+  return radios.map((item) => ({ item, score: radioMatchScore(query, itemName(item)) }))
+    .filter(({ score }) => score >= 0.6)
+    .sort((left, right) => right.score - left.score)
+    .slice(0, 10)
+    .map(({ item }) => item);
+}
+
+function ambiguousRadioChoices(query, matches) {
+  const ranked = [...new Map(matches.filter((item) => itemName(item) && item.uri)
+    .map((item) => [item.uri, item])).values()]
+    .map((item) => ({ item, score: radioMatchScore(query, itemName(item)) }))
+    .sort((left, right) => right.score - left.score);
+  if (ranked.length < 2 || ranked[0].score === 1 || ranked[1].score < 0.68 || ranked[0].score - ranked[1].score > 0.08) return [];
+  return ranked.filter(({ score }) => score >= ranked[0].score - 0.08).slice(0, 4).map(({ item }) => ({
+    name: itemName(item), uri: item.uri, mediaType: "radio"
+  }));
 }
 
 function editDistance(left, right) {
@@ -196,6 +255,16 @@ export class MusicAssistantProvider {
     return mediaTypes.flatMap((type) => result[`${type}s`] || result[type] || []);
   }
 
+  async searchLibraryRadios(query, { limit = 25, provider } = {}) {
+    return this.command("music/radios/library_items", {
+      ...(String(query || "").trim() ? { search: query } : {}), limit, offset: 0, ...(provider ? { provider } : {})
+    });
+  }
+
+  async getLibraryRadios({ limit = 500 } = {}) {
+    return (await this.searchLibraryRadios("", { limit })).map((radio) => this.normalizeItem(radio));
+  }
+
   async play({ query, playerId, sourceId, mode = "auto", searches = [], shuffle = false, mediaUri }) {
     const mediaTypes = ["artist", "playlist", "album", "radio"].includes(mode) ? [mode] : MEDIA_TYPES;
     if (mode === "album") await this.command("player_queues/shuffle", { queue_id: playerId, shuffle_enabled: false });
@@ -216,29 +285,62 @@ export class MusicAssistantProvider {
       return this.playbackAfterAcceptedCommand(playerId, null);
     }
     let matches = [];
+    if (mode === "radio") {
+      const radioQueries = radioSearchQueries(query);
+      for (const radioQuery of radioQueries) {
+        matches = await this.searchLibraryRadios(radioQuery, { provider: sourceId });
+        if (matches.length) break;
+      }
+      const comparisonQuery = radioQueries.at(-1);
+      const exact = matches.some((match) => radioMatchScore(comparisonQuery, itemName(match)) === 1);
+      if (!exact) {
+        const library = await this.searchLibraryRadios("", { limit: 500, provider: sourceId });
+        matches = similarLibraryRadios(comparisonQuery, library);
+      }
+    }
     for (const candidate of [query, ...searches].filter(Boolean)) {
+      if (mode === "radio") break;
       matches = await this.search(candidate, { mediaTypes, limit: 5, providers: sourceId ? [sourceId] : undefined });
       if (matches.length) break;
     }
-    if (!matches.length) throw new Error(`Music Assistant no encontró “${query}” en sus orígenes configurados`);
-    const choices = ambiguousChoices(query, matches);
+    if (!matches.length) throw new Error(mode === "radio"
+      ? `Music Assistant no encontró la radio “${query}” en la biblioteca`
+      : `Music Assistant no encontró “${query}” en sus orígenes configurados`);
+    const radioQuery = mode === "radio" ? radioSearchQueries(query).at(-1) : query;
+    const choices = mode === "radio" ? ambiguousRadioChoices(radioQuery, matches) : ambiguousChoices(query, matches);
     if (choices.length > 1) return { clarificationRequired: true, query, choices };
-    const normalized = normalizeText(query);
-    const item = matches.find((match) => normalizeText(itemName(match)) === normalized) || matches[0];
+    const normalized = mode === "radio" ? normalizeRadioName(radioQuery) : normalizeText(radioQuery);
+    const item = matches.find((match) => (mode === "radio" ? normalizeRadioName(itemName(match)) : normalizeText(itemName(match))) === normalized) || matches[0];
     await this.command("player_queues/play_media", { queue_id: playerId, media: item.uri || item, option: "replace" });
     if (shuffle && mode !== "album") await this.command("player_queues/shuffle", { queue_id: playerId, shuffle_enabled: true });
     return this.playbackAfterAcceptedCommand(playerId, item);
   }
 
   async playbackAfterAcceptedCommand(playerId, selectedItem) {
+    const normalizedSelected = this.normalizeItem(selectedItem);
     try {
-      return await this.getPlayback(playerId);
+      let playback = await this.getPlayback(playerId);
+      if (!selectedItem || normalizedSelected?.mediaType !== "radio" || sameMediaItem(playback.item, normalizedSelected)) return playback;
+      // Music Assistant acepta play_media antes de actualizar la cola. Una
+      // lectura inmediata puede seguir mostrando la emisora anterior.
+      for (const waitMs of [100, 200, 400]) {
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+        playback = await this.getPlayback(playerId);
+        if (sameMediaItem(playback.item, normalizedSelected)) return playback;
+      }
+      return {
+        ...playback,
+        status: "playing",
+        item: normalizedSelected,
+        previousItem: playback.item || null,
+        statePending: true
+      };
     } catch {
       // play_media ya fue aceptado. Una lectura de estado lenta no debe convertir
       // una acción con efectos laterales en un error ni provocar que se repita.
       return {
         status: "playing",
-        item: this.normalizeItem(selectedItem),
+        item: normalizedSelected,
         progressMs: 0,
         device: { id: playerId, name: null, volumePercent: null },
         queueId: playerId,
@@ -254,9 +356,26 @@ export class MusicAssistantProvider {
 
   pause(playerId) { return this.playerCommand(playerId, "pause"); }
   resume(playerId) { return this.playerCommand(playerId, "play"); }
-  next(playerId) { return this.playerCommand(playerId, "next"); }
-  previous(playerId) { return this.playerCommand(playerId, "previous"); }
+  next(playerId) { return this.moveQueue(playerId, "next"); }
+  previous(playerId) { return this.moveQueue(playerId, "previous"); }
   setVolume(playerId, volumePercent) { return this.playerCommand(playerId, "volume_set", { volume_level: Math.max(0, Math.min(100, Math.round(volumePercent))) }); }
+
+  async moveQueue(playerId, direction) {
+    const beforeQueue = await this.resolveQueue(playerId);
+    const beforeIndex = beforeQueue.current_index;
+    const beforeItem = this.normalizeItem(beforeQueue.current_item?.media_item || beforeQueue.current_item);
+    await this.command(`player_queues/${direction}`, { queue_id: beforeQueue.queue_id });
+    for (const waitMs of [0, 100, 250, 500, 1000]) {
+      if (waitMs) await new Promise((resolve) => setTimeout(resolve, waitMs));
+      const queue = await this.resolveQueue(playerId);
+      const item = this.normalizeItem(queue.current_item?.media_item || queue.current_item);
+      if ((Number.isInteger(queue.current_index) && queue.current_index !== beforeIndex) || !sameMediaItem(item, beforeItem)) {
+        const playback = await this.getPlayback(playerId);
+        return { ...playback, previousItem: beforeItem, queueIndex: queue.current_index };
+      }
+    }
+    throw new Error(`Music Assistant no cambió a la canción ${direction === "next" ? "siguiente" : "anterior"}`);
+  }
 
   async addToQueue(playerId, query) {
     const matches = await this.search(query, { mediaTypes: ["track"], limit: 5 });
@@ -267,8 +386,13 @@ export class MusicAssistantProvider {
 
   async getQueue(playerId) {
     const queue = await this.resolveQueue(playerId);
-    const items = await this.command("player_queues/items", { queue_id: queue.queue_id, limit: 100, offset: 0 });
-    return { queueId: queue.queue_id, currentIndex: queue.current_index ?? null, items: items.map((entry) => this.normalizeItem(entry.media_item || entry)) };
+    const rawItems = await this.command("player_queues/items", { queue_id: queue.queue_id, limit: 100, offset: 0 });
+    const items = rawItems.map((entry) => this.normalizeItem(entry.media_item || entry));
+    const currentIndex = Number.isInteger(queue.current_index) ? queue.current_index : null;
+    const queueCurrent = this.normalizeItem(queue.current_item?.media_item || queue.current_item);
+    const current = currentIndex !== null ? (items[currentIndex] || queueCurrent) : queueCurrent;
+    const upcoming = currentIndex !== null ? items.slice(currentIndex + 1) : items;
+    return { queueId: queue.queue_id, currentIndex, current, next: upcoming[0] || null, upcoming, items };
   }
 
   async clearQueue(playerId) {
@@ -278,7 +402,19 @@ export class MusicAssistantProvider {
   }
 
   async transfer(sourcePlayerId, targetPlayerId, play = true) {
-    await this.command("player_queues/transfer", { source_queue_id: sourcePlayerId, target_queue_id: targetPlayerId, auto_play: play });
+    const sourcePlayback = await this.getPlayback(sourcePlayerId);
+    try {
+      await this.command("player_queues/transfer", { source_queue_id: sourcePlayerId, target_queue_id: targetPlayerId, auto_play: play });
+    } catch (error) {
+      if (error.code === "MUSIC_ASSISTANT_AUTH_REQUIRED" || !sourcePlayback.item?.uri) throw error;
+      await this.command("player_queues/play_media", {
+        queue_id: targetPlayerId,
+        media: sourcePlayback.item.uri,
+        option: "replace"
+      });
+      if (!play) await this.command("players/cmd/pause", { player_id: targetPlayerId });
+      await this.command("players/cmd/pause", { player_id: sourcePlayerId });
+    }
     return this.getPlayback(targetPlayerId);
   }
 

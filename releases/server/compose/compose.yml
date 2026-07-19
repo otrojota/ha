@@ -1,0 +1,30 @@
+services:
+  searxng:
+    image: searxng/searxng:2026.7.10-4abac08de
+    container_name: ha-searxng
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8888:8080"
+    volumes:
+      - ./searxng-settings.yml:/etc/searxng/settings.yml:ro
+
+  music-assistant:
+    image: ${MUSIC_ASSISTANT_IMAGE:-ghcr.io/music-assistant/server:2.8.8}
+    container_name: ha-music-assistant
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - /var/lib/ha/music-assistant:/data
+    environment:
+      LOG_LEVEL: ${MUSIC_ASSISTANT_LOG_LEVEL:-info}
+
+  home-assistant:
+    profiles: ["home-assistant"]
+    image: ${HOME_ASSISTANT_IMAGE:-ghcr.io/home-assistant/home-assistant:stable}
+    container_name: ha-home-assistant
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - /var/lib/ha/home-assistant:/config
+    environment:
+      TZ: ${TZ:-America/Santiago}

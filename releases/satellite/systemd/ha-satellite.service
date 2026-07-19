@@ -1,0 +1,22 @@
+[Unit]
+Description=HA Voice Assistant Satellite
+Wants=network-online.target
+After=network-online.target user@@@SATELLITE_UID@@.service
+Requires=user@@@SATELLITE_UID@@.service
+
+[Service]
+Type=simple
+User=@@SATELLITE_USER@@
+Group=@@SATELLITE_GROUP@@
+SupplementaryGroups=audio video render input
+WorkingDirectory=/opt/ha/current
+EnvironmentFile=/etc/ha/satellite.env
+Environment=XDG_RUNTIME_DIR=/run/user/@@SATELLITE_UID@@
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/@@SATELLITE_UID@@/bus
+Environment=PULSE_SERVER=unix:/run/user/@@SATELLITE_UID@@/pulse/native
+ExecStart=/usr/bin/node apps/satellite/src/index.js
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

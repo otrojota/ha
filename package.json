@@ -1,6 +1,6 @@
 {
   "name": "ha-voice-assistant",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Monorepo para un asistente de voz modular basado en LLM y herramientas.",
   "type": "module",
@@ -23,4 +23,3 @@
     "node": ">=20"
   }
 }
-

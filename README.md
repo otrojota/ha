@@ -65,9 +65,9 @@ El satélite emite eventos de presencia periódicos y captura frases desde el mi
 
 El backend anuncia automáticamente `_ha-assistant._tcp.local` mediante mDNS/DNS-SD. Cada host conserva una identidad UUID propia en `dev/server/config/identity-<hostname>.json`, por lo que los satélites pueden reconocerlo aunque DHCP cambie su IP y dos servidores ejecuten el mismo repositorio compartido.
 
-El satélite descubre servidores en la red local. Si encuentra uno y no existe una selección previa lo elige automáticamente; si encuentra varios, el display permite elegir uno en **Configuración → Servidor**. La selección se persiste en `dev/satellite/config/server.json`. `SERVER_URL=ws://host:3000/ws` agrega un fallback manual a la lista sin ocultar los servidores mDNS.
+El satélite descubre servidores en la red local. Si encuentra uno y no existe una selección previa lo elige automáticamente; si encuentra varios, el display permite elegir uno en **Configuración → Servidor**. La selección y el último endpoint conocido se persisten en `dev/satellite/config/server.json`, de modo que pueda reconectarse durante el arranque aunque mDNS aún no haya anunciado el servidor.
 
-Servidor y satélites deben compartir la misma red de capa 2 y permitir mDNS por UDP 5353. En una VM de desarrollo debe usarse red puenteada. El satélite deriva WebSocket y STT del servidor elegido; el display usa además esa dirección para las APIs remotas del backend y Music Gateway.
+Servidor y satélites deben compartir la misma red de capa 2 y permitir mDNS por UDP 5353. En una VM de desarrollo debe usarse red puenteada. El satélite deriva los endpoints canónicos del servidor elegido; no existe configuración manual ni compatibilidad con anuncios de protocolos anteriores.
 
 ## Desarrollo separado de servidor y satélite
 
@@ -103,7 +103,7 @@ En macOS debe estar instalado `ffmpeg` (`brew install ffmpeg`). En Linux deben e
 
 ## Reconocimiento de voz
 
-El nombre y palabra de activación se persisten en `dev/satellite/config/assistant.json`; su valor inicial es `Asistente`. El display permite cambiarlo y valida contra el vocabulario español antes de guardar.
+El nombre y palabra de activación se persisten en `dev/satellite/config/assistant.json`; su valor inicial es `Asistente`. En `Configuración → Asistente → Nombre y activación`, el display permite cambiarlo, valida contra el vocabulario español y permite apagar la detección automática conservando el botón de escucha manual.
 
 El servidor ejecuta `whisper-cli`, configurable mediante `WHISPER_CLI`, usando el modelo indicado por `WHISPER_MODEL_PATH`. La configuración inicial espera el modelo multilingüe `small` en `dev/server/models/ggml-small.bin`. En macOS puede instalarse el ejecutable con `brew install whisper-cpp`; en Linux debe compilarse o instalarse `whisper.cpp` para la plataforma del servidor. `WHISPER_NO_GPU=true` fuerza CPU cuando el backend gráfico no está disponible o no es estable; puede cambiarse a `false` en el servidor definitivo.
 
@@ -129,10 +129,31 @@ Para cambiar el nombre se usa Configuración → Nombre del asistente en el disp
 
 ## Interpretación y tools
 
-El backend usa Ollama con `qwen3.5:9b` para interpretar el texto reconocido. Las tools son módulos de código con una definición JSON para el LLM y un método `execute` registrado en `ToolRegistry`. La primera implementación incluye `assistant_get_identity`, que retorna el nombre, propósito y capacidades configuradas del asistente.
+El backend permite seleccionar desde el display Ollama, OpenAI API, GitHub Models o cualquier API compatible con OpenAI. La configuración no secreta se guarda en `server.json`; las API keys se almacenan aparte en `secrets.json`, con permisos restringidos, y nunca se devuelven al display. Antes de activar un cambio, el servidor comprueba conexión y tool calling. Las tools son módulos de código con una definición JSON para el LLM y un método `execute` registrado en `ToolRegistry`.
 
-`startServer.sh` usa la instancia indicada por `OLLAMA_URL`. Si apunta a `localhost` o `127.0.0.1` y la API no está disponible, ejecuta `ollama serve` y guarda su PID; si apunta a otra máquina, nunca intenta iniciar ni detener Ollama localmente. `stopServer.sh` sólo detiene Ollama cuando fue iniciado por el propio entorno. El modelo se mantiene cargado durante 30 minutos y el modo thinking está desactivado para reducir latencia de voz.
+`startServer.sh` sólo verifica o inicia Ollama cuando ése es el proveedor activo. Si la URL configurada apunta a `localhost` o `127.0.0.1` y la API no está disponible, ejecuta `ollama serve` y guarda su PID; con un proveedor externo no inicia Ollama. `stopServer.sh` sólo detiene una instancia iniciada por el propio entorno.
 
 ## Ejecución como servicio Linux
 
 Los mismos scripts POSIX funcionan manualmente en Linux y pueden envolverse en una unidad `systemd` con `ExecStart` y `ExecStop`. Para una instalación definitiva conviene que `systemd` ejecute Node directamente en primer plano y gestione reinicios, usuario, logs y dependencias; la capa de audio y los archivos `.env` son comunes en ambos casos y no requieren cambios en la aplicación.
+
+### Rutas de configuración de producción
+
+En Linux, los scripts cargan `/etc/ha/server.env` y `/etc/ha/satellite.env` cuando existen. Si no existen, conservan los archivos de desarrollo `dev/server/.env` y `dev/satellite/.env`. Las variables declaradas en esos archivos siempre tienen prioridad.
+
+Cuando están creados los directorios del componente, las rutas persistentes predeterminadas son:
+
+```text
+/etc/ha/server/server.json
+/etc/ha/server/secrets.json
+/etc/ha/server/identity-<hostname>.json
+/etc/ha/server/alarms.json
+/etc/ha/server/music.json
+/etc/ha/server/music-assistant.env
+
+/etc/ha/satellite/audio.json
+/etc/ha/satellite/assistant.json
+/etc/ha/satellite/server.json
+```
+
+Si `/etc/ha/server` o `/etc/ha/satellite` no existen, cada componente usa automáticamente su ruta equivalente dentro de `dev/`. El instalador debe crear los directorios de producción y asignarlos al usuario que ejecuta cada servicio, porque la aplicación actualiza estos archivos de forma atómica.

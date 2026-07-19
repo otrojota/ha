@@ -1,5 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import { nextOccurrence, validateRecurrence } from "./recurrence.js";
 
 const maximumDelayMs = 30 * 24 * 60 * 60 * 1000;
 
@@ -34,13 +35,19 @@ export class AlarmScheduler {
   }
 
   isStoredAlarmValid(alarm) {
-    return Boolean(alarm
+    try {
+      return Boolean(alarm
       && typeof alarm.id === "string"
       && typeof alarm.satelliteId === "string"
-      && ["alarm", "reminder", "timer"].includes(alarm.kind)
+      && ["alarm", "reminder", "timer", "automation"].includes(alarm.kind)
       && typeof alarm.label === "string"
       && typeof alarm.scheduledFor === "string"
-      && !Number.isNaN(Date.parse(alarm.scheduledFor)));
+      && !Number.isNaN(Date.parse(alarm.scheduledFor))
+      && (!alarm.recurrence || Boolean(validateRecurrence(alarm.recurrence)))
+      && (alarm.kind !== "automation" || (Array.isArray(alarm.actions) && alarm.actions.length > 0)));
+    } catch {
+      return false;
+    }
   }
 
   install(alarm, delayMs) {
@@ -61,12 +68,13 @@ export class AlarmScheduler {
     return this.persistence;
   }
 
-  async schedule({ satelliteId, triggerAt, kind = "reminder", label = "" }) {
+  async schedule({ satelliteId, triggerAt, kind = "reminder", label = "", actions = [], announce = false, recurrence = null }) {
     if (!satelliteId) throw new Error("No se pudo identificar el satélite que recibirá el aviso");
+    const normalizedRecurrence = recurrence ? validateRecurrence(recurrence) : null;
     const scheduledFor = triggerAt instanceof Date ? triggerAt : new Date(triggerAt);
     if (Number.isNaN(scheduledFor.getTime())) throw new Error("La fecha de la alarma no es válida");
     const delayMs = scheduledFor.getTime() - this.now().getTime();
-    if (delayMs < 1000) throw new Error("La alarma debe programarse al menos un segundo en el futuro");
+    if (delayMs < (normalizedRecurrence ? 0 : 1000)) throw new Error("La alarma debe programarse al menos un segundo en el futuro");
     if (delayMs > maximumDelayMs) throw new Error("La alarma no puede programarse a más de 30 días");
 
     const alarm = {
@@ -74,6 +82,8 @@ export class AlarmScheduler {
       satelliteId,
       kind,
       label: String(label || "").trim().slice(0, 160),
+      ...(kind === "automation" ? { actions, announce: announce === true } : {}),
+      ...(normalizedRecurrence ? { recurrence: normalizedRecurrence } : {}),
       scheduledFor: scheduledFor.toISOString(),
       createdAt: this.now().toISOString()
     };
@@ -87,13 +97,19 @@ export class AlarmScheduler {
     const scheduled = this.alarms.get(id);
     if (!scheduled) return;
     this.alarms.delete(id);
-    await this.persist();
     this.log("info", "Alarma activada", scheduled.alarm);
     try {
       await this.onFire(scheduled.alarm);
     } catch (error) {
       this.log("warn", "No se pudo emitir la alarma", { id, error: error.message });
     }
+    if (scheduled.alarm.recurrence) {
+      const next = nextOccurrence(scheduled.alarm.recurrence, this.now());
+      scheduled.alarm.scheduledFor = next.toISOString();
+      this.install(scheduled.alarm, next.getTime() - this.now().getTime());
+      this.log("info", "Alarma recurrente reprogramada", { id, scheduledFor: scheduled.alarm.scheduledFor });
+    }
+    await this.persist();
   }
 
   list(satelliteId) {

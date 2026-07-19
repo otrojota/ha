@@ -4,18 +4,18 @@ export function createSetActiveMusicDestinationTool({ music }) {
       type: "function",
       function: {
         name: "music_set_active_destination",
-        description: "Cambia de forma persistente el destino activo entre los dispositivos previamente agregados. Acepta nombre, alias o habitación.",
+        description: "Cambia sólo el destino predeterminado de este satélite para las próximas acciones. No mueve ninguna reproducción existente; para moverla usa music_transfer_playback.",
         parameters: {
           type: "object",
-          properties: { destination: { type: "string", description: "Nombre, alias o habitación del destino" } },
+          properties: { destination: { type: "string", description: "Nombre del destino tal como aparece en Music Assistant" } },
           required: ["destination"], additionalProperties: false
         }
       }
     },
-    async execute({ destination }) {
+    async execute({ destination }, context = {}) {
       if (!String(destination || "").trim()) throw new Error("Indica el destino de música");
-      const result = await music.setActiveDestination(destination);
-      return { id: result.id, name: result.alias || result.name, room: result.room, active: true };
+      const result = await music.setActiveDestination(destination, context.satelliteId);
+      return { id: result.id, name: result.name, active: true };
     }
   };
 }

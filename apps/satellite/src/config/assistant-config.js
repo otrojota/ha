@@ -4,7 +4,7 @@ import { dirname } from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
-const defaultConfig = { name: "Asistente" };
+const defaultConfig = { name: "Asistente", wakeWordEnabled: true };
 
 export function normalizeAssistantName(value) {
   if (typeof value !== "string") throw new Error("El nombre debe ser texto");
@@ -17,7 +17,10 @@ export function normalizeAssistantName(value) {
 export async function readAssistantConfig(path, log) {
   try {
     const stored = JSON.parse(await readFile(path, "utf8"));
-    return { name: normalizeAssistantName(stored.name) };
+    return {
+      name: normalizeAssistantName(stored.name),
+      wakeWordEnabled: stored.wakeWordEnabled !== false
+    };
   } catch (error) {
     if (error.code !== "ENOENT") log("warn", "No se pudo leer la configuración del asistente", { error: error.message });
     return { ...defaultConfig };

@@ -1,6 +1,6 @@
 {
   "name": "@ha/music-gateway",
-  "version": "0.1.0",
+  "version": "0.1.18",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,5 +9,5 @@
     "check": "node --check src/index.js && node --check src/destination-store.js && node --check src/music-assistant-provider.js",
     "test": "node --test src/*.test.js"
   },
-  "dependencies": { "@ha/shared": "0.1.0" }
+  "dependencies": { "@ha/shared": "0.1.1" }
 }

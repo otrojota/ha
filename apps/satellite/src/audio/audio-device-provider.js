@@ -17,5 +17,8 @@ export class AudioDeviceProvider {
 }
 
 export function normalizeDevice(id, name, extra = {}) {
-  return { id: String(id), name: name || String(id), available: true, ...extra };
+  const technicalId = String(id);
+  const label = String(name ?? "").trim();
+  const invalidLabel = !label || /^(?:null|undefined|none|\(null\)|<null>)$/i.test(label);
+  return { id: technicalId, name: invalidLabel ? technicalId : label, available: true, ...extra };
 }

@@ -5,9 +5,9 @@ export function createListMusicSourcesTool({ music }) {
       description: "Lista los orígenes de música configurados y disponibles en Music Assistant. Úsala cuando pregunten de dónde puede obtener música el asistente.",
       parameters: { type: "object", properties: {}, additionalProperties: false }
     } },
-    async execute(args) {
+    async execute(args, context = {}) {
       if (!args || typeof args !== "object" || Array.isArray(args) || Object.keys(args).length) throw new Error("music_list_sources no acepta argumentos");
-      return music.getSources();
+      return music.getSources(context.satelliteId);
     }
   };
 }

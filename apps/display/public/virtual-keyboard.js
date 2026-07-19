@@ -11,6 +11,7 @@
     ["-", "0", ".", "backspace"], ["left", "right", "done"]
   ];
   const labels = { shift: "⇧", backspace: "⌫", left: "←", right: "→", space: "Espacio", done: "Listo" };
+  const editableSelector = "textarea, input:not([type]), input[type=text], input[type=search], input[type=email], input[type=url], input[type=tel], input[type=password], input[type=number]";
 
   class VirtualKeyboard {
     constructor() {
@@ -24,7 +25,7 @@
       this.root.setAttribute("aria-label", "Teclado en pantalla");
       this.root.innerHTML = `<div class="virtual-keyboard-header"><span id="virtual-keyboard-label">Teclado</span><button type="button" data-key="done" aria-label="Cerrar teclado">×</button></div><div class="virtual-keyboard-rows"></div>`;
       document.body.append(this.root);
-      document.querySelectorAll("input:not([type=hidden]):not([type=checkbox]):not([type=radio]), textarea").forEach((input) => {
+      document.querySelectorAll(editableSelector).forEach((input) => {
         input.dataset.originalInputmode = input.getAttribute("inputmode") || "";
         input.setAttribute("inputmode", "none");
       });
@@ -36,12 +37,12 @@
         if (key) this.press(key);
       });
       document.addEventListener("focusin", (event) => {
-        if (event.target.matches("input:not([type=hidden]):not([type=checkbox]):not([type=radio]), textarea")) this.show(event.target);
+        if (event.target.matches(editableSelector)) this.show(event.target);
       });
     }
 
     keyboardType(input) {
-      return input.dataset.virtualKeyboard || (["number", "range"].includes(input.type) ? "numeric" : "text");
+      return input.dataset.virtualKeyboard || (input.type === "number" ? "numeric" : "text");
     }
 
     show(input) {

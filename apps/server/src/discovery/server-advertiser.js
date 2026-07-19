@@ -1,4 +1,5 @@
 import { Bonjour } from "bonjour-service";
+import { PROTOCOL_VERSION } from "@ha/contracts";
 
 export const ASSISTANT_SERVICE_TYPE = "ha-assistant";
 
@@ -27,9 +28,7 @@ export class ServerAdvertiser {
       txt: {
         id: this.identity.id,
         name: this.identity.name,
-        protocolVersion: "1",
-        wsPath: "/ws",
-        sttPath: "/stt/transcribe"
+        protocolVersion: PROTOCOL_VERSION
       }
     });
     this.service.on("up", () => this.log("info", "Servidor anunciado por mDNS", {

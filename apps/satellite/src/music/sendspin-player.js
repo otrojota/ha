@@ -1,10 +1,9 @@
 import { spawn } from "node:child_process";
 
 export class SendspinPlayer {
-  constructor({ executable = "sendspin", satelliteId, room, serverUrl = "", log = () => {} }) {
+  constructor({ executable = "sendspin", satelliteId, serverUrl = "", log = () => {} }) {
     this.executable = executable;
     this.satelliteId = satelliteId;
-    this.room = room;
     this.serverUrl = serverUrl;
     this.log = log;
     this.process = null;
@@ -20,8 +19,9 @@ export class SendspinPlayer {
       this.log("info", "Reproductor Music Assistant deshabilitado");
       return this.status(config);
     }
-    const name = String(config.musicPlayerName || "").trim();
-    if (!name) throw new Error("El reproductor musical necesita un nombre antes de habilitarse");
+    // Este nombre sólo sirve para el primer registro de un clientId estable.
+    // El nombre visible y editable es propiedad de Music Assistant.
+    const name = String(config.registrationName || "").trim() || `HA Satellite ${this.satelliteId}`;
     const args = ["daemon", "--id", `ha-${this.satelliteId}`, "--name", name, "--manufacturer", "HA Voice Assistant", "--product-name", "Satellite Speaker"];
     const device = String(config.musicOutputDeviceId || "").trim();
     if (device) args.push("--audio-device", device);
@@ -64,6 +64,6 @@ export class SendspinPlayer {
   }
 
   status(config = {}) {
-    return { enabled: config.musicPlayerEnabled !== false, running: Boolean(this.process), name: config.musicPlayerName || "", clientId: `ha-${this.satelliteId}`, outputDeviceId: config.musicOutputDeviceId || null, protocol: "sendspin", error: this.lastError };
+    return { enabled: config.musicPlayerEnabled !== false, running: Boolean(this.process), clientId: `ha-${this.satelliteId}`, outputDeviceId: config.musicOutputDeviceId || null, protocol: "sendspin", error: this.lastError };
   }
 }

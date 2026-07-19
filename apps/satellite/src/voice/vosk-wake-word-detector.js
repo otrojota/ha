@@ -2,13 +2,14 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 
 export class VoskWakeWordDetector {
-  constructor({ python, scriptPath, modelPath, wakeWord, cooldownMs = 5000, minConfidence = 0.82, onDetected, log }) {
+  constructor({ python, scriptPath, modelPath, wakeWord, cooldownMs = 5000, exactMinConfidence = 0.72, embeddedMinConfidence = 0.90, onDetected, log }) {
     this.python = python;
     this.scriptPath = scriptPath;
     this.modelPath = modelPath;
     this.wakeWord = wakeWord;
     this.cooldownMs = cooldownMs;
-    this.minConfidence = minConfidence;
+    this.exactMinConfidence = exactMinConfidence;
+    this.embeddedMinConfidence = embeddedMinConfidence;
     this.onDetected = onDetected;
     this.log = log;
     this.process = null;
@@ -21,7 +22,8 @@ export class VoskWakeWordDetector {
       "--model", this.modelPath,
       "--wake-word", this.wakeWord,
       "--cooldown-ms", String(this.cooldownMs),
-      "--min-confidence", String(this.minConfidence)
+      "--exact-min-confidence", String(this.exactMinConfidence),
+      "--embedded-min-confidence", String(this.embeddedMinConfidence)
     ], { stdio: ["pipe", "pipe", "pipe"] });
     this.process = child;
     child.stderr.setEncoding("utf8");

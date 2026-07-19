@@ -1,0 +1,19 @@
+cd releases
+
+Raspberry
+- en raspberry
+mkdir /tmp/i1
+chown jota /tmp/i1
+
+- en desarrollo
+- copiar a raspberry:
+scp satellite/install.sh dist/ha-satellite-0.1.14-linux-arm64.tar.gz* jota@192.168.0.143:/tmp/i1
+
+- en raspberry
+cd /tmp/i1
+sudo env HA_SATELLITE_USER="$(whoami)" HA_RELEASE_ARCHIVE="$PWD/ha-satellite-0.1.14-linux-arm64.tar.gz" ./install.sh
+
+Server
+- En servidor (macserver)
+cd /opt/ha
+sudo env HA_RELEASE_ARCHIVE=./ha-server-0.1.10-linux-arm64.tar.gz sh ./install.sh

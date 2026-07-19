@@ -1,5 +1,6 @@
 import { isIP } from "node:net";
 import { Bonjour } from "bonjour-service";
+import { PROTOCOL_VERSION } from "@ha/contracts";
 
 export const ASSISTANT_SERVICE_TYPE = "ha-assistant";
 
@@ -7,20 +8,32 @@ function usableAddress(address) {
   return isIP(address) === 4 && !address.startsWith("127.") && !address.startsWith("169.254.");
 }
 
+function sameIpv4Subnet(left, right) {
+  if (!usableAddress(left) || !usableAddress(right)) return false;
+  return left.split(".").slice(0, 3).join(".") === right.split(".").slice(0, 3).join(".");
+}
+
+function selectAdvertisedAddress(service) {
+  const receiverAddress = service.referer?.address;
+  const advertised = [...new Set(service.addresses || [])].filter(usableAddress);
+  return advertised.find((address) => sameIpv4Subnet(address, receiverAddress))
+    || advertised[0]
+    || (usableAddress(receiverAddress) ? receiverAddress : null);
+}
+
 export function normalizeDiscoveredServer(service) {
   const id = String(service.txt?.id || "").trim();
+  if (String(service.txt?.protocolVersion || "") !== PROTOCOL_VERSION) return null;
   const port = Number(service.port);
-  const address = [service.referer?.address, ...(service.addresses || [])].find(usableAddress);
+  const address = selectAdvertisedAddress(service);
   if (!id || !address || !Number.isInteger(port) || port < 1 || port > 65535) return null;
-  const name = String(service.txt?.name || service.name || "Servidor del asistente").trim();
-  const wsPath = String(service.txt?.wsPath || "/ws");
-  const sttPath = String(service.txt?.sttPath || "/stt/transcribe");
+  const name = String(service.txt?.name || "").trim();
+  if (!name) return null;
   return {
-    id, name, address, host: service.host || null, port,
-    protocolVersion: String(service.txt?.protocolVersion || "1"),
+    id, name, address, port, protocolVersion: PROTOCOL_VERSION,
     httpUrl: `http://${address}:${port}`,
-    webSocketUrl: `ws://${address}:${port}${wsPath.startsWith("/") ? wsPath : `/${wsPath}`}`,
-    speechToTextUrl: `http://${address}:${port}${sttPath.startsWith("/") ? sttPath : `/${sttPath}`}`,
+    webSocketUrl: `ws://${address}:${port}/ws`,
+    speechToTextUrl: `http://${address}:${port}/stt/transcribe`,
     musicApiUrl: `http://${address}:3100/v1`,
     available: true
   };

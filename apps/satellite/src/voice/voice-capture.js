@@ -1,10 +1,25 @@
 import { spawn } from "node:child_process";
-import { readFile, unlink } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { randomUUID } from "node:crypto";
 
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+const PCM_BYTES_PER_MILLISECOND = 32; // mono, 16 kHz, signed 16-bit
+
+export function pcmToWav(pcm) {
+  const header = Buffer.alloc(44);
+  header.write("RIFF", 0);
+  header.writeUInt32LE(36 + pcm.length, 4);
+  header.write("WAVE", 8);
+  header.write("fmt ", 12);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(1, 22);
+  header.writeUInt32LE(16_000, 24);
+  header.writeUInt32LE(32_000, 28);
+  header.writeUInt16LE(2, 32);
+  header.writeUInt16LE(16, 34);
+  header.write("data", 36);
+  header.writeUInt32LE(pcm.length, 40);
+  return Buffer.concat([header, pcm]);
+}
 
 function captureInput(deviceId) {
   if (!deviceId) return process.platform === "darwin" ? ["-f", "avfoundation", "-i", ":default"] : ["-f", "pulse", "-i", "default"];
@@ -82,6 +97,7 @@ export class VoiceCapture {
     readConfig,
     onPhrase,
     onListeningTimeout = () => {},
+    onCaptureError = () => {},
     onAudio = () => {},
     onLevel = () => {},
     log,
@@ -89,17 +105,28 @@ export class VoiceCapture {
     maxPhraseSeconds = 15,
     noiseFloorDb = -50,
     speechStartMarginDb = 10,
-    speechEndMarginDb = 6
+    speechEndMarginDb = 6,
+    commandSpeechStartMarginDb = 6,
+    commandMinimumSpeechMs = 100,
+    preRollMs = 400,
+    onCommandWindowStarted = () => {}
   }) {
     this.readConfig = readConfig;
     this.onPhrase = onPhrase;
     this.onListeningTimeout = onListeningTimeout;
+    this.onCaptureError = onCaptureError;
     this.onAudio = onAudio;
     this.onLevel = onLevel;
+    this.onCommandWindowStarted = onCommandWindowStarted;
     this.log = log;
     this.silenceDuration = silenceDuration;
     this.maxPhraseSeconds = maxPhraseSeconds;
     this.commandExpiresAt = 0;
+    this.commandWindowMs = 0;
+    this.bridgeCurrentPhrase = false;
+    this.commandSpeechStartMarginDb = commandSpeechStartMarginDb;
+    this.commandMinimumSpeechMs = commandMinimumSpeechMs;
+    this.preRollBytes = Math.max(0, Math.round(preRollMs * PCM_BYTES_PER_MILLISECOND));
     this.activityDetector = new AdaptiveVoiceActivityDetector({
       initialNoiseFloorDb: noiseFloorDb,
       startMarginDb: speechStartMarginDb,
@@ -109,17 +136,21 @@ export class VoiceCapture {
     this.running = false;
     this.paused = false;
     this.process = null;
+    this.generation = 0;
   }
 
   start() {
     if (this.running) return;
     this.running = true;
-    this.loop().catch((error) => this.log("warn", "Captura de voz detenida", { error: error.message }));
+    this.paused = false;
+    const generation = ++this.generation;
+    this.loop(generation).catch((error) => this.log("warn", "Captura de voz detenida", { error: error.message }));
   }
 
   stop() {
     this.running = false;
     this.paused = true;
+    this.generation += 1;
     this.process?.kill("SIGINT");
   }
 
@@ -132,13 +163,21 @@ export class VoiceCapture {
     if (this.running) this.paused = false;
   }
 
-  arm(commandWindowMs) {
+  arm(commandWindowMs, { bridgeCurrentPhrase = false } = {}) {
+    this.commandWindowMs = commandWindowMs;
     this.commandExpiresAt = Date.now() + commandWindowMs;
+    this.bridgeCurrentPhrase = bridgeCurrentPhrase;
   }
 
-  async loop() {
+  disarm() {
+    this.commandWindowMs = 0;
+    this.commandExpiresAt = 0;
+    this.bridgeCurrentPhrase = false;
+  }
+
+  async loop(generation) {
     let consecutiveFailures = 0;
-    while (this.running) {
+    while (this.running && this.generation === generation) {
       if (this.paused) {
         await delay(100);
         continue;
@@ -153,13 +192,18 @@ export class VoiceCapture {
       try {
         const capture = await this.capturePhrase(input, config.inputChannel);
         consecutiveFailures = 0;
-        if (!this.paused && capture?.audio?.length > 8_000) {
-          await this.onPhrase(capture.audio, { commandWasArmed: capture.commandWasArmed });
+        if (this.generation !== generation) continue;
+        if (!this.paused && capture?.audio?.length > 44) {
+          await this.onPhrase(capture.audio, {
+            commandWasArmed: capture.commandWasArmed,
+            bridgedCommand: capture.bridgedCommand === true
+          });
         } else if (!this.paused && capture?.commandTimedOut) {
           await this.onListeningTimeout();
         }
       } catch (error) {
         if (this.paused || !this.running) continue;
+        await this.onCaptureError(error);
         consecutiveFailures += 1;
         const retryDelayMs = Math.min(30_000, 1_500 * (2 ** (consecutiveFailures - 1)));
         this.log("warn", "No se pudo capturar audio", {
@@ -173,17 +217,23 @@ export class VoiceCapture {
   }
 
   async capturePhrase(input, channel) {
-    const outputPath = join(tmpdir(), `ha-voice-${randomUUID()}.wav`);
-    const filter = `[0:a]pan=mono|c0=c${channel},aresample=16000,asplit=2[record][meter]`;
+    const filter = `[0:a]pan=mono|c0=c${channel},aresample=16000[out]`;
     const args = [
       "-hide_banner", "-loglevel", "info", ...input,
       "-filter_complex", filter,
-      "-map", "[record]", "-ac", "1", "-c:a", "pcm_s16le", "-y", outputPath,
-      "-map", "[meter]", "-ac", "1", "-c:a", "pcm_s16le", "-f", "s16le", "pipe:1"
+      "-map", "[out]", "-ac", "1", "-c:a", "pcm_s16le", "-f", "s16le", "pipe:1"
     ];
 
     let speechStarted = false;
     let phraseEnded = false;
+    let bridgedCommand = false;
+    let commandSpeechStarted = false;
+    let commandBoundaryByte = null;
+    let speechStartByte = null;
+    let commandSpeechStartByte = null;
+    let activeDetector = this.activityDetector;
+    const pcmChunks = [];
+    let totalPcmBytes = 0;
     let stderr = "";
     this.activityDetector.resetPhrase();
     const child = spawn("ffmpeg", args, { stdio: ["ignore", "pipe", "pipe"] });
@@ -191,6 +241,7 @@ export class VoiceCapture {
     const captureExpiresAt = Date.now() + this.maxPhraseSeconds * 1000;
     let stopRequested = false;
     let forceStopTimeout = null;
+    let boundaryDecisionTimeout = null;
     const requestStop = () => {
       if (stopRequested || child.exitCode !== null || child.signalCode !== null) return;
       stopRequested = true;
@@ -219,6 +270,10 @@ export class VoiceCapture {
         data = data.subarray(0, -1);
       }
       if (data.length) this.onAudio(data);
+      if (data.length) {
+        pcmChunks.push(data);
+        totalPcmBytes += data.length;
+      }
       for (let offset = 0; offset < data.length; offset += 2) {
         const sample = data.readInt16LE(offset);
         const absolute = Math.abs(sample);
@@ -230,15 +285,60 @@ export class VoiceCapture {
         const rms = Math.sqrt(sumSquares / sampleCount) / 32768;
         const db = rms > 0 ? Math.max(-60, 20 * Math.log10(rms)) : -60;
         const durationMs = sampleCount / 16;
-        const activity = this.activityDetector.process(db, durationMs);
+        if (this.commandExpiresAt > 0 && this.bridgeCurrentPhrase && !bridgedCommand) {
+          bridgedCommand = true;
+          this.bridgeCurrentPhrase = false;
+          commandBoundaryByte = totalPcmBytes;
+          activeDetector = new AdaptiveVoiceActivityDetector({
+            initialNoiseFloorDb: this.activityDetector.noiseFloorDb,
+            startMarginDb: this.commandSpeechStartMarginDb,
+            endMarginDb: this.activityDetector.endMarginDb,
+            minimumSpeechMs: this.commandMinimumSpeechMs,
+            silenceDurationMs: this.activityDetector.silenceDurationMs,
+            calibrationFrames: 1
+          });
+          this.commandExpiresAt = Date.now() + this.commandWindowMs;
+          this.onCommandWindowStarted(this.commandWindowMs);
+          clearTimeout(boundaryDecisionTimeout);
+          boundaryDecisionTimeout = null;
+        }
+        const activity = activeDetector.process(db, durationMs);
         speechStarted ||= activity.speechStarted;
+        if (bridgedCommand) commandSpeechStarted ||= activity.speechStarted;
+        if (activity.speechStarted) {
+          const estimatedStart = Math.max(0, totalPcmBytes - Math.round(activeDetector.loudDurationMs * PCM_BYTES_PER_MILLISECOND));
+          if (bridgedCommand && commandSpeechStartByte === null) commandSpeechStartByte = estimatedStart;
+          else if (!bridgedCommand && speechStartByte === null) speechStartByte = estimatedStart;
+        }
         this.onLevel({ db: Number(db.toFixed(1)), level: Math.min(1, Math.max(0, (db + 60) / 60)), clipping: peak >= 32760 });
         sumSquares = 0;
         sampleCount = 0;
         peak = 0;
         if (activity.phraseEnded) {
-          phraseEnded = true;
-          requestStop();
+          // Damos una ventana mínima al proceso Vosk para devolver su detección
+          // final antes de cerrar ffmpeg. La comunicación entre procesos puede
+          // llegar unas decenas de milisegundos después del mismo bloque de audio.
+          if (!boundaryDecisionTimeout) boundaryDecisionTimeout = setTimeout(() => {
+            boundaryDecisionTimeout = null;
+            if (this.commandExpiresAt > 0 && this.bridgeCurrentPhrase && !bridgedCommand) {
+              bridgedCommand = true;
+              this.bridgeCurrentPhrase = false;
+              commandBoundaryByte = totalPcmBytes;
+              activeDetector = new AdaptiveVoiceActivityDetector({
+                initialNoiseFloorDb: this.activityDetector.noiseFloorDb,
+                startMarginDb: this.commandSpeechStartMarginDb,
+                endMarginDb: this.activityDetector.endMarginDb,
+                minimumSpeechMs: this.commandMinimumSpeechMs,
+                silenceDurationMs: this.activityDetector.silenceDurationMs,
+                calibrationFrames: 1
+              });
+              this.commandExpiresAt = Date.now() + this.commandWindowMs;
+              this.onCommandWindowStarted(this.commandWindowMs);
+              return;
+            }
+            phraseEnded = true;
+            requestStop();
+          }, 150);
         }
       }
     });
@@ -254,12 +354,19 @@ export class VoiceCapture {
     }).finally(() => {
       clearInterval(timeout);
       clearTimeout(forceStopTimeout);
+      clearTimeout(boundaryDecisionTimeout);
       if (this.process === child) this.process = null;
     });
 
     const commandWasArmed = this.commandExpiresAt > 0;
     const commandTimedOut = commandWasArmed && Date.now() >= this.commandExpiresAt;
+    if (bridgedCommand && commandTimedOut && !commandSpeechStarted) {
+      this.commandExpiresAt = 0;
+      this.bridgeCurrentPhrase = false;
+      return { audio: null, commandWasArmed: true, commandTimedOut: true };
+    }
     if (speechStarted || commandTimedOut) this.commandExpiresAt = 0;
+    this.bridgeCurrentPhrase = false;
 
     try {
       const expectedInterrupt = exitSignal === "SIGINT" && (stopRequested || this.paused || !this.running);
@@ -270,14 +377,17 @@ export class VoiceCapture {
       if (!speechStarted) return commandTimedOut ? { audio: null, commandWasArmed, commandTimedOut: true } : null;
       this.log("info", "Frase capturada", {
         reason: phraseEnded ? "adaptive_silence" : "limit",
-        noiseFloorDb: Number(this.activityDetector.noiseFloorDb.toFixed(1))
+        noiseFloorDb: Number(activeDetector.noiseFloorDb.toFixed(1)),
+        bridgedCommand
       });
-      return { audio: await readFile(outputPath), commandWasArmed, commandTimedOut: false };
+      const pcm = Buffer.concat(pcmChunks);
+      const detectedStart = bridgedCommand ? commandSpeechStartByte : speechStartByte;
+      const lowerBound = bridgedCommand ? (commandBoundaryByte ?? 0) : 0;
+      const startByte = Math.max(lowerBound, (detectedStart ?? lowerBound) - this.preRollBytes) & ~1;
+      return { audio: pcmToWav(pcm.subarray(startByte)), commandWasArmed, commandTimedOut: false, bridgedCommand };
     } catch (error) {
       const status = exitSignal ? `señal ${exitSignal}` : `código ${exitCode}`;
       throw new Error(`ffmpeg terminó con ${status}: ${stderr.split("\n").at(-2) || error.message}`);
-    } finally {
-      await unlink(outputPath).catch(() => {});
     }
   }
 }

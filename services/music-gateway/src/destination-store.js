@@ -68,13 +68,16 @@ function resolveByLabels(items, query, labelsFor, kind) {
 }
 
 export class DestinationStore {
-  constructor(path) { this.path = path; this.state = { activeDestinationId: null, activeSourceId: null, preferences: {} }; }
+  constructor(path) { this.path = path; this.state = { activeDestinationIds: {}, activeSourceIds: {} }; }
   async load() {
     try {
       const saved = JSON.parse(await readFile(this.path, "utf8"));
-      this.state.activeDestinationId = saved.activeDestinationId || null;
-      this.state.activeSourceId = saved.activeSourceId || null;
-      this.state.preferences = saved.preferences || {};
+      const keys = Object.keys(saved).sort();
+      if (keys.join(",") !== "activeDestinationIds,activeSourceIds" || !saved.activeDestinationIds || !saved.activeSourceIds
+        || Array.isArray(saved.activeDestinationIds) || Array.isArray(saved.activeSourceIds)) {
+        throw new Error("La configuración de música no cumple el contrato actual");
+      }
+      this.state = { activeDestinationIds: saved.activeDestinationIds, activeSourceIds: saved.activeSourceIds };
     } catch (error) { if (error.code !== "ENOENT") throw error; }
   }
   async save() {
@@ -83,52 +86,53 @@ export class DestinationStore {
     await writeFile(temporary, `${JSON.stringify(this.state, null, 2)}\n`);
     await rename(temporary, this.path);
   }
-  decorate(players) {
-    return players.map((player) => ({ ...player, ...(this.state.preferences[player.id] || {}), active: player.id === this.state.activeDestinationId }));
+  activeDestinationId(scope) {
+    if (!String(scope || "").trim()) throw new Error("Falta satelliteId para resolver el destino activo");
+    return this.state.activeDestinationIds[String(scope).trim()] || null;
   }
-  resolve(players, query) {
-    const decorated = this.decorate(players).filter((player) => player.enabled !== false);
+  decorate(players, scope) {
+    const activeDestinationId = this.activeDestinationId(scope);
+    return players.map((player) => ({ ...player, active: player.id === activeDestinationId }));
+  }
+  resolve(players, query, scope) {
+    const decorated = this.decorate(players, scope);
     if (!query) return decorated.find((player) => player.active) || decorated.find((player) => player.available) || decorated[0] || null;
     const exactId = decorated.find((player) => String(player.id) === String(query));
     if (exactId) return exactId;
-    const match = resolveByLabels(decorated, query, (player) => [player.alias, player.room, player.name], "destino");
+    const match = resolveByLabels(decorated, query, (player) => [player.name], "destino");
     if (!match) throw new Error(`No existe un destino de Music Assistant que coincida con “${query}”`);
     return match;
   }
-  async setActive(players, query) {
-    const player = this.resolve(players, query);
-    if (!player) throw new Error("Music Assistant no tiene destinos habilitados");
-    if (!player.available) throw new Error(`El destino ${player.alias || player.name} no está disponible`);
-    this.state.activeDestinationId = player.id;
+  async setActive(players, query, scope) {
+    const player = this.resolve(players, query, scope);
+    if (!player) throw new Error("Music Assistant no tiene destinos disponibles");
+    if (!player.available) throw new Error(`El destino ${player.name} no está disponible`);
+    const key = String(scope || "").trim();
+    if (!key) throw new Error("Falta satelliteId para seleccionar el destino activo");
+    this.state.activeDestinationIds[key] = player.id;
     await this.save();
     return { ...player, active: true };
   }
-  resolveSource(sources, query) {
+  activeSourceId(scope) {
+    if (!String(scope || "").trim()) throw new Error("Falta satelliteId para resolver el origen activo");
+    return this.state.activeSourceIds[String(scope).trim()] || null;
+  }
+  resolveSource(sources, query, scope) {
     const available = sources.filter((source) => source.available !== false);
-    if (!query) return available.find((source) => source.id === this.state.activeSourceId) || available.find((source) => source.streaming) || available[0] || null;
+    if (!query) return available.find((source) => source.id === this.activeSourceId(scope)) || available.find((source) => source.streaming) || available[0] || null;
     const exact = available.find((source) => String(source.id) === String(query));
     if (exact) return exact;
     const match = resolveByLabels(available, query, (source) => [source.name, source.domain], "origen");
     if (!match) throw new Error(`No existe un origen disponible en Music Assistant que coincida con “${query}”`);
     return match;
   }
-  async setActiveSource(sources, query) {
-    const source = this.resolveSource(sources, query);
+  async setActiveSource(sources, query, scope) {
+    const source = this.resolveSource(sources, query, scope);
     if (!source) throw new Error("Music Assistant no tiene orígenes disponibles");
-    this.state.activeSourceId = source.id;
+    const key = String(scope || "").trim();
+    if (!key) throw new Error("Falta satelliteId para seleccionar el origen activo");
+    this.state.activeSourceIds[key] = source.id;
     await this.save();
     return { ...source, active: true };
-  }
-  async update(players, id, update) {
-    if (!players.some((player) => player.id === id)) throw new Error("Destino no encontrado en Music Assistant");
-    this.state.preferences[id] = {
-      ...(this.state.preferences[id] || {}),
-      alias: String(update.alias ?? this.state.preferences[id]?.alias ?? "").trim().slice(0, 80),
-      room: String(update.room ?? this.state.preferences[id]?.room ?? "").trim().slice(0, 80),
-      enabled: update.enabled === undefined ? this.state.preferences[id]?.enabled !== false : Boolean(update.enabled)
-    };
-    if (this.state.preferences[id].enabled === false && this.state.activeDestinationId === id) this.state.activeDestinationId = null;
-    await this.save();
-    return this.decorate(players).find((player) => player.id === id);
   }
 }

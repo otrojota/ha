@@ -42,6 +42,51 @@ test("desactiva shuffle antes de iniciar un álbum completo", async () => {
   assert.equal(result.item.name, "In the Flesh?");
 });
 
+test("avanza la cola activa y sólo confirma cuando cambió el elemento", async () => {
+  let advanced = false;
+  const commands = [];
+  const provider = new MusicAssistantProvider({ fetchImpl: async (_url, options) => {
+    const request = JSON.parse(options.body);
+    commands.push(request);
+    if (request.command === "player_queues/next") { advanced = true; return response(null); }
+    if (request.command === "players/all") return response([{ player_id: "speaker", name: "Satélite", playback_state: "playing" }]);
+    if (request.command === "player_queues/all") return response([{
+      queue_id: "speaker", state: "playing", current_index: advanced ? 1 : 0,
+      current_item: { media_item: { uri: advanced ? "library://track/2" : "library://track/1", name: advanced ? "Dos" : "Uno", media_type: "track" } }
+    }]);
+    throw new Error(request.command);
+  }});
+
+  const result = await provider.next("speaker");
+
+  assert.equal(result.item.name, "Dos");
+  assert.equal(result.previousItem.name, "Uno");
+  assert.deepEqual(commands.find((item) => item.command === "player_queues/next").args, { queue_id: "speaker" });
+  assert.equal(commands.some((item) => item.command === "players/cmd/next"), false);
+});
+
+test("describe la canción actual y las próximas desde la cola", async () => {
+  const provider = new MusicAssistantProvider({ fetchImpl: async (_url, options) => {
+    const request = JSON.parse(options.body);
+    if (request.command === "player_queues/all") return response([{
+      queue_id: "speaker", current_index: 1,
+      current_item: { media_item: { uri: "track:2", name: "Dos", media_type: "track" } }
+    }]);
+    if (request.command === "player_queues/items") return response([
+      { media_item: { uri: "track:1", name: "Uno", media_type: "track" } },
+      { media_item: { uri: "track:2", name: "Dos", media_type: "track" } },
+      { media_item: { uri: "track:3", name: "Tres", media_type: "track" } }
+    ]);
+    throw new Error(request.command);
+  }});
+
+  const result = await provider.getQueue("speaker");
+
+  assert.equal(result.current.name, "Dos");
+  assert.equal(result.next.name, "Tres");
+  assert.deepEqual(result.upcoming.map((item) => item.name), ["Tres"]);
+});
+
 test("limita la búsqueda al origen activo de Music Assistant", async () => {
   let searchProviders;
   const provider = new MusicAssistantProvider({ fetchImpl: async (_url, options) => {
@@ -57,6 +102,144 @@ test("limita la búsqueda al origen activo de Music Assistant", async () => {
   } });
   await provider.play({ query: "Peter Gabriel", playerId: "eversolo", sourceId: "tidal--home", mode: "artist" });
   assert.deepEqual(searchProviders, ["tidal--home"]);
+});
+
+test("busca una emisora sólo entre las radios de la biblioteca", async () => {
+  const commands = [];
+  const provider = new MusicAssistantProvider({ fetchImpl: async (_url, options) => {
+    const request = JSON.parse(options.body);
+    commands.push(request);
+    if (request.command === "music/radios/library_items") return response([{
+      uri: "library://radio/42",
+      name: "Radio Bío-Bío",
+      media_type: "radio",
+      provider: "library",
+      provider_mappings: [{ provider_domain: "radiobrowser", provider_instance: "radiobrowser--chile", item_id: "biobio" }]
+    }]);
+    if (request.command === "player_queues/play_media") return response(null);
+    if (request.command === "players/all") return response([]);
+    if (request.command === "player_queues/all") return response([]);
+    throw new Error(request.command);
+  } });
+
+  const result = await provider.play({ query: "BioBio", playerId: "satellite", mode: "radio" });
+
+  const lookup = commands.find((item) => item.command === "music/radios/library_items");
+  assert.equal(lookup.args.search, "BioBio");
+  assert.equal(commands.some((item) => item.command === "music/search"), false);
+  assert.equal(commands.find((item) => item.command === "player_queues/play_media").args.media, "library://radio/42");
+  assert.equal(result.item.provider, "radiobrowser--chile");
+});
+
+test("no confunde la radio anterior con la recién solicitada mientras MA actualiza la cola", async () => {
+  let playbackReads = 0;
+  const provider = new MusicAssistantProvider({ fetchImpl: async (_url, options) => {
+    const request = JSON.parse(options.body);
+    if (request.command === "music/radios/library_items") return response([{
+      uri: "library://radio/biobio-valparaiso", name: "BioBio Valparaíso", media_type: "radio", provider: "library"
+    }]);
+    if (request.command === "player_queues/play_media") return response(null);
+    if (request.command === "players/all") return response([{ player_id: "speaker", name: "Parlante", playback_state: "playing" }]);
+    if (request.command === "player_queues/all") {
+      playbackReads += 1;
+      const radio = playbackReads < 3
+        ? { uri: "library://radio/futuro", name: "Futuro", media_type: "radio" }
+        : { uri: "library://radio/biobio-valparaiso", name: "BioBio Valparaíso", media_type: "radio" };
+      return response([{ queue_id: "speaker", state: "playing", current_item: { media_item: radio } }]);
+    }
+    throw new Error(`Comando inesperado: ${request.command}`);
+  }});
+
+  const result = await provider.play({ query: "Bio Bio Valparaíso", playerId: "speaker", mode: "radio" });
+
+  assert.equal(result.item.name, "BioBio Valparaíso");
+  assert.equal(result.item.uri, "library://radio/biobio-valparaiso");
+  assert.equal(playbackReads, 3);
+});
+
+test("reintenta una radio sin el prefijo genérico hablado", async () => {
+  const searches = [];
+  const provider = new MusicAssistantProvider({ fetchImpl: async (_url, options) => {
+    const request = JSON.parse(options.body);
+    if (request.command === "music/radios/library_items") {
+      searches.push(request.args.search);
+      return response(request.args.search === "BioBio Chile" ? [{
+        uri: "library://radio/biobio", name: "BioBio Chile", media_type: "radio"
+      }] : []);
+    }
+    if (request.command === "player_queues/play_media") return response(null);
+    if (request.command === "players/all" || request.command === "player_queues/all") return response([]);
+    throw new Error(request.command);
+  } });
+
+  const result = await provider.play({ query: "Radio BioBio Chile", playerId: "eversolo", mode: "radio" });
+
+  assert.deepEqual(searches, ["Radio BioBio Chile", "BioBio Chile"]);
+  assert.equal(result.item.name, "BioBio Chile");
+});
+
+test("encuentra una radio de biblioteca por nombre similar", async () => {
+  const provider = new MusicAssistantProvider({ fetchImpl: async (_url, options) => {
+    const request = JSON.parse(options.body);
+    if (request.command === "music/radios/library_items") return response(request.args.search ? [] : [{
+      uri: "library://radio/biobio-chile", name: "BioBio Chile", media_type: "radio"
+    }]);
+    if (request.command === "player_queues/play_media") return response(null);
+    if (request.command === "players/all" || request.command === "player_queues/all") return response([]);
+    throw new Error(request.command);
+  } });
+
+  const result = await provider.play({ query: "Radio Bio Bio Chle", playerId: "eversolo", mode: "radio" });
+
+  assert.equal(result.item.name, "BioBio Chile");
+});
+
+test("encuentra una radio con número escrito cuando Whisper lo transcribe como dígito", async () => {
+  const provider = new MusicAssistantProvider({ fetchImpl: async (_url, options) => {
+    const request = JSON.parse(options.body);
+    if (request.command === "music/radios/library_items") return response(request.args.search ? [] : [
+      { uri: "library://radio/fm-dos", name: "FM Dos", media_type: "radio" },
+      { uri: "library://radio/fm-tiempo", name: "FM Tiempo", media_type: "radio" }
+    ]);
+    if (request.command === "player_queues/play_media") return response(null);
+    if (request.command === "players/all" || request.command === "player_queues/all") return response([]);
+    throw new Error(request.command);
+  } });
+
+  const result = await provider.play({ query: "FM2", playerId: "eversolo", mode: "radio" });
+
+  assert.equal(result.item.name, "FM Dos");
+});
+
+test("pide aclaración cuando varias radios de biblioteca tienen nombres similares", async () => {
+  const provider = new MusicAssistantProvider({ fetchImpl: async (_url, options) => {
+    const request = JSON.parse(options.body);
+    if (request.command === "music/radios/library_items") return response(request.args.search ? [] : [
+      { uri: "library://radio/biobio-chile", name: "BioBio Chile", media_type: "radio" },
+      { uri: "library://radio/biobio-valparaiso", name: "BioBio Valparaíso", media_type: "radio" },
+      { uri: "library://radio/cooperativa", name: "Cooperativa", media_type: "radio" }
+    ]);
+    throw new Error(`No debía ejecutar ${request.command}`);
+  } });
+
+  const result = await provider.play({ query: "Radio BioBio", playerId: "eversolo", mode: "radio" });
+
+  assert.equal(result.clarificationRequired, true);
+  assert.deepEqual(result.choices.map((choice) => choice.name), ["BioBio Chile", "BioBio Valparaíso"]);
+});
+
+test("lista únicamente las emisoras guardadas en la biblioteca", async () => {
+  let request;
+  const provider = new MusicAssistantProvider({ fetchImpl: async (_url, options) => {
+    request = JSON.parse(options.body);
+    return response([{ uri: "library://radio/42", name: "Radio Bío-Bío", media_type: "radio" }]);
+  } });
+
+  const radios = await provider.getLibraryRadios();
+
+  assert.equal(request.command, "music/radios/library_items");
+  assert.equal(Object.hasOwn(request.args, "search"), false);
+  assert.deepEqual(radios.map((radio) => radio.name), ["Radio Bío-Bío"]);
 });
 
 test("solicita aclaración cuando una letra hablada coincide con nombres de artista distintos", async () => {
@@ -126,6 +309,35 @@ test("conserva el detalle de un error HTTP de Music Assistant", async () => {
     json: async () => ({ error_code: 7, details: "Player Eversolo is not available" })
   }) });
   await assert.rejects(provider.command("player_queues/play_media"), /Player Eversolo is not available/);
+});
+
+test("reproduce la misma radio en el destino cuando MA rechaza transferir la cola", async () => {
+  const commands = [];
+  let targetPlaying = false;
+  const provider = new MusicAssistantProvider({ fetchImpl: async (_url, options) => {
+    const request = JSON.parse(options.body);
+    commands.push(request);
+    if (request.command === "players/all") return response([
+      { player_id: "origen", name: "Origen", playback_state: "playing" },
+      { player_id: "destino", name: "Destino", playback_state: targetPlaying ? "playing" : "idle" }
+    ]);
+    if (request.command === "player_queues/all") return response([
+      { queue_id: "origen", state: "playing", current_item: { media_item: { uri: "library://radio/fm-dos", name: "FM Dos", media_type: "radio" } } },
+      ...(targetPlaying ? [{ queue_id: "destino", state: "playing", current_item: { media_item: { uri: "library://radio/fm-dos", name: "FM Dos", media_type: "radio" } } }] : [])
+    ]);
+    if (request.command === "player_queues/transfer") return { ok: false, status: 500, json: async () => ({}) };
+    if (request.command === "player_queues/play_media") { targetPlaying = true; return response(null); }
+    if (request.command === "players/cmd/pause") return response(null);
+    throw new Error(request.command);
+  } });
+
+  const result = await provider.transfer("origen", "destino", true);
+
+  assert.equal(result.item.name, "FM Dos");
+  assert.deepEqual(commands.find((item) => item.command === "player_queues/play_media").args, {
+    queue_id: "destino", media: "library://radio/fm-dos", option: "replace"
+  });
+  assert.deepEqual(commands.find((item) => item.command === "players/cmd/pause").args, { player_id: "origen" });
 });
 
 test("envía control de volumen al reproductor MA", async () => {

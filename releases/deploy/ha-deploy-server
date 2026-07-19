@@ -1,0 +1,40 @@
+#!/bin/sh
+set -eu
+
+INCOMING=/var/tmp/ha-deploy/server
+ARCHIVE=$INCOMING/release.tar.gz
+CHECKSUM=$INCOMING/release.sha256
+LOCK=/run/lock/ha-deploy-server.lock
+
+validate_file() {
+  [ -f "$1" ] && [ ! -L "$1" ] || { echo "Falta el archivo regular $1" >&2; exit 1; }
+  [ "$(stat -c %U "$1")" = jota ] || { echo "$1 no pertenece al usuario autorizado" >&2; exit 1; }
+}
+
+deploy() {
+  validate_file "$ARCHIVE"
+  validate_file "$CHECKSUM"
+  expected=$(awk 'NR == 1 { print $1 }' "$CHECKSUM")
+  case "$expected" in ''|*[!0-9a-fA-F]*) echo "Checksum inválido" >&2; exit 1 ;; esac
+  [ "${#expected}" -eq 64 ] || { echo "Checksum inválido" >&2; exit 1; }
+  actual=$(sha256sum "$ARCHIVE" | awk '{ print $1 }')
+  [ "$actual" = "$expected" ] || { echo "El checksum del release no coincide" >&2; exit 1; }
+
+  root=$(tar -tzf "$ARCHIVE" | sed -n '1{s|/.*||;p;}')
+  case "$root" in ha-server-[0-9]*.[0-9]*.[0-9]*) ;; *) echo "Raíz de release inválida: $root" >&2; exit 1 ;; esac
+  tar -tzf "$ARCHIVE" | awk -v root="$root/" 'index($0, root) != 1 || $0 ~ /(^|\/)\.\.($|\/)/ || $0 ~ /^\// { exit 1 }' \
+    || { echo "El release contiene rutas inseguras" >&2; exit 1; }
+  tar -tzf "$ARCHIVE" | grep -qx "$root/install-release.sh" \
+    || { echo "El release no contiene install-release.sh" >&2; exit 1; }
+
+  work=$(mktemp -d /opt/ha/.server-deploy.XXXXXX)
+  trap 'rm -rf "$work"' EXIT HUP INT TERM
+  tar --no-same-owner -xzf "$ARCHIVE" -C "$work"
+  "$work/$root/install-release.sh" 9>&-
+  rm -f "$ARCHIVE" "$CHECKSUM"
+  echo "Despliegue del servidor completado: $root"
+}
+
+exec 9>"$LOCK"
+flock -n 9 || { echo "Ya hay un despliegue del servidor en curso" >&2; exit 1; }
+deploy
