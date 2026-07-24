@@ -31,6 +31,7 @@ npm-debug.log*
 *.crt
 
 # Configuración y estado persistente de esta instalación
+.instalacion.txt
 dev/server/config/alarms.json
 dev/server/config/devices.json
 dev/server/home-assistant/config/

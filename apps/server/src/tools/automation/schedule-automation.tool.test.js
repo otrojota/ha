@@ -33,3 +33,22 @@ test("programa una acción diaria usando la zona horaria del servidor", async ()
   assert.equal(result.scheduledFor, "2026-07-15T00:00:00.000Z");
   assert.deepEqual(scheduled.recurrence, { frequency: "daily", localTime: "20:00", timeZone: "America/Santiago" });
 });
+
+test("permite programar las mismas acciones de música y dispositivos Home Assistant", async () => {
+  let scheduled;
+  const scheduler = { async schedule(value) { scheduled = value; return { id: "tools-1", ...value, scheduledFor: value.triggerAt.toISOString() }; } };
+  const tool = createScheduleAutomationTool({ scheduler, homeEnabled: true });
+
+  await tool.execute({ delaySeconds: 60, announce: true, actions: [
+    { type: "music_next", destination: "Pantallita" },
+    { type: "home_set_power", target: "Ventilador", room: "Living", on: false },
+    { type: "climate_set_temperature", target: "Termostato", temperature: 21 }
+  ] }, { satelliteId: "sat-1", timeZone: "America/Santiago", now: () => new Date("2026-07-19T12:00:00Z") });
+
+  assert.deepEqual(scheduled.actions, [
+    { type: "music_next", destination: "Pantallita" },
+    { type: "home_set_power", target: "Ventilador", room: "Living", on: false },
+    { type: "climate_set_temperature", target: "Termostato", temperature: 21 }
+  ]);
+  assert.equal(scheduled.announce, true);
+});

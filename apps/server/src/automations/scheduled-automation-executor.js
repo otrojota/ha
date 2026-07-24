@@ -1,5 +1,7 @@
 export class ScheduledAutomationExecutor {
-  constructor({ home, music, log = () => {} }) { this.home = home; this.music = music; this.log = log; }
+  constructor({ home, music, executeTool, log = () => {} }) {
+    this.home = home; this.music = music; this.executeTool = executeTool; this.log = log;
+  }
 
   async execute(automation) {
     const results = [];
@@ -16,6 +18,10 @@ export class ScheduledAutomationExecutor {
   }
 
   executeAction(action, satelliteId) {
+    if (this.executeTool) {
+      const { type, ...args } = action;
+      return this.executeTool(type, args, { satelliteId });
+    }
     if (action.type === "light_turn_on") return this.home.setPower(action.target, true);
     if (action.type === "light_turn_off") return this.home.setPower(action.target, false);
     if (action.type === "light_set_brightness") return this.home.setBrightness(action.target, action.brightnessPercent);

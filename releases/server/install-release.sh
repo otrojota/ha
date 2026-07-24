@@ -42,6 +42,9 @@ fi
 node "$RELEASE_DIR/migrate-config-v2.mjs" /etc/ha/server/music.json /etc/ha/server/server.json
 
 chown -R root:root "$RELEASE_DIR"
+# El wrapper puede ejecutarse desde una sesión con umask restrictiva. Asegura
+# que los servicios sin privilegios puedan recorrer y leer el release.
+chmod -R a+rX "$RELEASE_DIR"
 chown -R ha:ha /etc/ha/server /var/lib/ha
 ln -sfn "$RELEASE_DIR" /opt/ha/current
 

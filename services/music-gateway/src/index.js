@@ -9,7 +9,10 @@ const port = Number(env("MUSIC_GATEWAY_PORT", "3100"));
 const provider = new MusicAssistantProvider({
   baseUrl: env("MUSIC_ASSISTANT_URL", "http://127.0.0.1:8095"),
   token: env("MUSIC_ASSISTANT_TOKEN", ""),
-  timeoutMs: Number(env("MUSIC_ASSISTANT_TIMEOUT_MS", "30000"))
+  timeoutMs: Number(env("MUSIC_ASSISTANT_TIMEOUT_MS", "30000")),
+  artistAlbumConcurrency: Number(env("MUSIC_ARTIST_ALBUM_CONCURRENCY", "4")),
+  artistAlbumTimeoutMs: Number(env("MUSIC_ARTIST_ALBUM_TIMEOUT_MS", "8000")),
+  log: jsonLog
 });
 const store = new DestinationStore(env("MUSIC_CONFIG_PATH", configPath("/etc/ha/server/music.json", "dev/server/config/music.json")));
 const musicAssistantEnvPath = env("MUSIC_ASSISTANT_ENV_PATH", configPath("/etc/ha/server/music-assistant.env", "dev/server/.music-assistant.env"));

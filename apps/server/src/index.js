@@ -122,7 +122,7 @@ const musicGateway = new MusicGatewayClient({
   baseUrl: env("MUSIC_GATEWAY_URL", "http://localhost:3100"),
   timeoutMs: Number(env("MUSIC_GATEWAY_TIMEOUT_MS", "90000"))
 });
-const scheduledAutomationExecutor = new ScheduledAutomationExecutor({ home: homeAutomation, music: musicGateway, log: jsonLog });
+let scheduledAutomationExecutor;
 const alarmScheduler = new AlarmScheduler({
   storagePath: env("ALARM_CONFIG_PATH", configPath("/etc/ha/server/alarms.json", "dev/server/config/alarms.json")),
   log: jsonLog,
@@ -132,7 +132,6 @@ const alarmScheduler = new AlarmScheduler({
     if (alarm.announce) publishAssistantResponse(result.success ? `Automatización ejecutada${alarm.label ? `: ${alarm.label}` : ""}.` : `La automatización terminó con errores${alarm.label ? `: ${alarm.label}` : ""}.`, alarm.satelliteId);
   }
 });
-await alarmScheduler.start();
 tools.push(createSetAlarmTool({ scheduler: alarmScheduler }));
 tools.push(createListAlarmsTool({ scheduler: alarmScheduler }));
 tools.push(createCancelAlarmTool({ scheduler: alarmScheduler }));
@@ -156,6 +155,13 @@ tools.push(createGetMusicQueueTool({ music: musicGateway }));
 tools.push(createGetCurrentMusicCreditsTool({ music: musicGateway }));
 tools.push(createClearMusicQueueTool({ music: musicGateway }));
 const toolRegistry = new ToolRegistry(tools);
+scheduledAutomationExecutor = new ScheduledAutomationExecutor({
+  home: homeAutomation,
+  music: musicGateway,
+  executeTool: (name, args, context) => toolRegistry.execute(name, args, context),
+  log: jsonLog
+});
+await alarmScheduler.start();
 const llmClientManager = new LlmClientManager(createLlmClient(serverConfig.llm, serverSecrets.llm[serverConfig.llm.provider]));
 const assistantAgent = new AssistantAgent({
   client: llmClientManager,
@@ -358,10 +364,11 @@ function broadcast(event, sender) {
   }
 }
 
-function publishAssistantResponse(text, targetSatelliteId) {
+function publishAssistantResponse(text, targetSatelliteId, { speak = true } = {}) {
   const expectsReply = responseExpectsReply(text);
   const responseEvent = createEvent(EventType.ASSISTANT_RESPONSE, { text, expectsReply, targetSatelliteId }, "server");
   broadcast(responseEvent);
+  if (!speak) return;
   broadcast(createEvent(EventType.ASSISTANT_SPEECH_REQUESTED, {
     text,
     responseId: responseEvent.id,
@@ -398,19 +405,22 @@ async function respondToCommand(text, source, context = {}) {
     return;
   }
   try {
+    let suppressSpeech = false;
     const history = conversationMemory.getHistory(source);
     jsonLog("info", "Interpretando comando", { text, source, historyMessages: history.length });
     const generatedAnswer = await assistantAgent.respond(text, {
       ...baseAssistantContext,
       assistantName: context.assistantName || defaultAssistantName,
+      connectedPowerDeviceId: context.connectedPowerDeviceId || null,
       location: serverConfig.location,
       satelliteId: source,
-      history
+      history,
+      suppressSpeech: () => { suppressSpeech = true; }
     });
     const answer = removeGenericFollowUp(generatedAnswer) || "Listo.";
     conversationMemory.appendTurn(source, text, answer);
-    publishAssistantResponse(answer, source);
-    jsonLog("info", "Respuesta del asistente creada", { text: answer, source });
+    publishAssistantResponse(answer, source, { speak: !suppressSpeech });
+    jsonLog("info", "Respuesta del asistente creada", { text: answer, source, speechSuppressed: suppressSpeech });
   } catch (error) {
     jsonLog("warn", "No se pudo interpretar el comando", { error: error.message, source });
     const text = "Lo siento, no pude procesar esa solicitud.";
@@ -434,6 +444,10 @@ async function handleTranscription(request, response) {
     }
     const transcript = await speechToText.transcribe(Buffer.concat(chunks));
     const assistantName = String(request.headers["x-assistant-name"] || defaultAssistantName).trim();
+    const connectedPowerDeviceId = String(request.headers["x-connected-power-device-id"] || "").trim();
+    if (connectedPowerDeviceId && !/^switch\.[a-z0-9_]+$/.test(connectedPowerDeviceId)) {
+      throw new Error("El enchufe conectado del satélite no es una entidad switch válida");
+    }
     const text = transcript.trim();
     const assistantNameOnly = isAssistantNameOnly(text, assistantName);
     const meaningfulCommand = !assistantNameOnly && isMeaningfulVoiceCommand(text);
@@ -442,9 +456,10 @@ async function handleTranscription(request, response) {
       broadcast(createEvent(EventType.TRANSCRIPT_RECEIVED, {
         text,
         transcript,
-        assistantName
+        assistantName,
+        connectedPowerDeviceId: connectedPowerDeviceId || null
       }, source));
-      void respondToCommand(text, source, { assistantName });
+      void respondToCommand(text, source, { assistantName, connectedPowerDeviceId: connectedPowerDeviceId || null });
     }
     if (assistantNameOnly) {
       jsonLog("info", "Nombre aislado del asistente; esperando el comando siguiente", { transcript, assistantName, source });
@@ -483,7 +498,14 @@ websocket.on("connection", (socket, request) => {
       broadcast(event, socket);
 
       if (event.type === EventType.TRANSCRIPT_RECEIVED) {
-        void respondToCommand(event.payload.text, event.source, { assistantName: event.payload.assistantName || defaultAssistantName });
+        const connectedPowerDeviceId = String(event.payload.connectedPowerDeviceId || "").trim();
+        if (connectedPowerDeviceId && !/^switch\.[a-z0-9_]+$/.test(connectedPowerDeviceId)) {
+          throw new Error("El evento contiene un enchufe conectado inválido");
+        }
+        void respondToCommand(event.payload.text, event.source, {
+          assistantName: event.payload.assistantName || defaultAssistantName,
+          connectedPowerDeviceId: connectedPowerDeviceId || null
+        });
       }
     } catch (error) {
       jsonLog("warn", "Mensaje WebSocket rechazado", { error: error.message });

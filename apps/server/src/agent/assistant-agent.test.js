@@ -6,6 +6,14 @@ function toolCall(name, args) {
   return { role: "assistant", content: "", tool_calls: [{ function: { name, arguments: args } }] };
 }
 
+function toolCalls(calls) {
+  return {
+    role: "assistant",
+    content: "",
+    tool_calls: calls.map(({ name, args }) => ({ function: { name, arguments: args } }))
+  };
+}
+
 test("el tool calling del LLM es la fuente de intención y conserva sus argumentos", async () => {
   let turn = 0;
   const calls = [];
@@ -58,6 +66,50 @@ test("no reemplaza radio, origen ni destino elegidos por el LLM", async () => {
   assert.deepEqual(calls, [{ name: "music_play", args: expected }]);
 });
 
+test("reproduce un artista en el destino pedido sin transferir la cola anterior", async () => {
+  let turn = 0;
+  const calls = [];
+  const request = { query: "Pink Floyd", destination: "Satellite 1", mode: "artist" };
+  const client = { async chat(messages) {
+    turn += 1;
+    if (turn === 1) return { message: toolCall("music_transfer_playback", { destination: "Satellite 1", play: true }) };
+    if (turn === 2) {
+      assert.match(messages.at(-1).content, /requiere music_play; no ejecutes music_transfer_playback/);
+      return { message: toolCall("music_play", request) };
+    }
+    return { message: { role: "assistant", content: "Reproduciendo Pink Floyd en Satellite 1." } };
+  } };
+  const tools = { definitions: () => [], async execute(name, args) {
+    calls.push({ name, args });
+    return { status: "playing", item: { name: "Pink Floyd" }, destination: "Satellite 1" };
+  } };
+
+  await new AssistantAgent({ client, tools, log: () => {} })
+    .respond("quiero escuchar música de Pink Floyd en el satélite 1", { satelliteId: "dev-satellite-1" });
+
+  assert.deepEqual(calls, [{ name: "music_play", args: request }]);
+});
+
+test("transfiere solamente cuando el pedido se refiere a la reproducción actual", async () => {
+  let turn = 0;
+  const calls = [];
+  const client = { async chat() {
+    turn += 1;
+    return { message: turn === 1
+      ? toolCall("music_transfer_playback", { destination: "Satellite 1", play: true })
+      : { role: "assistant", content: "He transferido la reproducción." } };
+  } };
+  const tools = { definitions: () => [], async execute(name, args) {
+    calls.push({ name, args });
+    return { status: "playing" };
+  } };
+
+  await new AssistantAgent({ client, tools, log: () => {} })
+    .respond("quiero escuchar esta música en el Satellite 1", { satelliteId: "dev-satellite-1" });
+
+  assert.deepEqual(calls, [{ name: "music_transfer_playback", args: { destination: "Satellite 1", play: true } }]);
+});
+
 test("una respuesta sin tool no dispara acciones inferidas por expresiones regulares", async () => {
   const executed = [];
   const client = { async chat() { return { message: { role: "assistant", content: "¿Qué volumen prefieres?" } }; } };
@@ -76,7 +128,7 @@ test("no acepta que el LLM confirme una acción que no ejecutó", async () => {
     turn += 1;
     if (turn === 1) return { message: { role: "assistant", content: "He pasado a la siguiente canción." } };
     if (turn === 2) {
-      assert.match(messages.at(-1).content, /No ejecutaste ninguna herramienta/);
+      assert.match(messages.at(-1).content, /No ejecutaste music_next/);
       return { message: toolCall("music_next", { destination: "Satélite 1" }) };
     }
     return { message: { role: "assistant", content: "Siguiente canción: Dos." } };
@@ -88,6 +140,208 @@ test("no acepta que el LLM confirme una acción que no ejecutó", async () => {
 
   assert.equal(answer, "Siguiente canción: Dos.");
   assert.deepEqual(calls, [{ name: "music_next", args: { destination: "Satélite 1" } }]);
+});
+
+test("rechaza consultar la cola cuando el usuario ordenó avanzar y exige music_next", async () => {
+  let turn = 0;
+  const calls = [];
+  const client = { async chat(messages) {
+    turn += 1;
+    if (turn === 1) return { message: toolCall("music_get_queue", {}) };
+    if (turn === 2) {
+      assert.match(messages.at(-1).content, /requiere music_next; no ejecutes music_get_queue/);
+      return { message: toolCall("music_next", {}) };
+    }
+    return { message: { role: "assistant", content: "Siguiente canción: Mala." } };
+  } };
+  const tools = { definitions: () => [], async execute(name) {
+    calls.push(name);
+    return { item: { name: "Mala" } };
+  } };
+
+  const answer = await new AssistantAgent({ client, tools, log: () => {} })
+    .respond("Siguiente canción", { satelliteId: "rpi" });
+
+  assert.deepEqual(calls, ["music_next"]);
+  assert.equal(answer, "Siguiente canción: Mala.");
+});
+
+test("marca como silenciosas las acciones que inician o cambian la pista", async () => {
+  for (const [command, tool] of [["Pon una canción", "music_play"], ["Siguiente canción", "music_next"], ["Canción anterior", "music_previous"]]) {
+    let turn = 0;
+    let suppressed = false;
+    const client = { async chat() {
+      turn += 1;
+      return { message: turn === 1 ? toolCall(tool, tool === "music_play" ? { query: "Canción" } : {})
+        : { role: "assistant", content: "Acción realizada." } };
+    } };
+    const tools = { definitions: () => [], async execute() { return { item: { name: "Canción" } }; } };
+
+    await new AssistantAgent({ client, tools, log: () => {} }).respond(command, {
+      satelliteId: "rpi", suppressSpeech: () => { suppressed = true; }
+    });
+
+    assert.equal(suppressed, true, tool);
+  }
+});
+
+test("mantiene TTS para consultas y controles que no cambian la pista", async () => {
+  let turn = 0;
+  let suppressed = false;
+  const client = { async chat() {
+    turn += 1;
+    return { message: turn === 1 ? toolCall("music_pause", {}) : { role: "assistant", content: "Música pausada." } };
+  } };
+  const tools = { definitions: () => [], async execute() { return { status: "paused" }; } };
+
+  await new AssistantAgent({ client, tools, log: () => {} }).respond("Pausa la música", {
+    satelliteId: "rpi", suppressSpeech: () => { suppressed = true; }
+  });
+
+  assert.equal(suppressed, false);
+});
+
+test("interpreta encender y apagar la música como reanudar y pausar", async () => {
+  for (const [command, expectedTool] of [["Enciende la música", "music_resume"], ["Prende la reproducción", "music_resume"], ["Apaga la música", "music_pause"]]) {
+    let turn = 0;
+    const calls = [];
+    const client = { async chat() {
+      turn += 1;
+      return { message: turn === 1 ? toolCall(expectedTool, {}) : { role: "assistant", content: "Listo." } };
+    } };
+    const tools = { definitions: () => [], async execute(name) { calls.push(name); return { status: "ok" }; } };
+
+    await new AssistantAgent({ client, tools, log: () => {} }).respond(command, { satelliteId: "rpi" });
+
+    assert.deepEqual(calls, [expectedTool], command);
+  }
+});
+
+test("una acción futura de Home Assistant no puede degradarse a un recordatorio", async () => {
+  let turn = 0;
+  const calls = [];
+  const scheduled = {
+    delaySeconds: 10,
+    actions: [{ type: "home_set_power", target: "enchufe Memo", on: true }]
+  };
+  const client = { async chat(messages) {
+    turn += 1;
+    if (turn === 1) return { message: toolCalls([
+      { name: "home_set_power", args: { target: "enchufe Memo", on: false } },
+      { name: "alarm_set", args: { delaySeconds: 10, kind: "reminder", label: "encender enchufe Memo" } }
+    ]) };
+    if (turn === 2) {
+      assert.match(messages.at(-1).content, /requiere automation_schedule.*alarm_set sólo crea un aviso/);
+      return { message: toolCall("automation_schedule", scheduled) };
+    }
+    return { message: { role: "assistant", content: "Apagué el enchufe y programé que vuelva a encenderse." } };
+  } };
+  const tools = {
+    definitions: () => [
+      { function: { name: "home_list_devices" } },
+      { function: { name: "automation_schedule" } }
+    ],
+    async execute(name, args) {
+      calls.push({ name, args });
+      return { status: "ok" };
+    }
+  };
+
+  await new AssistantAgent({ client, tools, log: () => {} })
+    .respond("Apaga el enchufe Memo y vuelve a encenderlo en 10 segundos.", { satelliteId: "dev-satellite-1" });
+
+  assert.deepEqual(calls, [
+    { name: "home_set_power", args: { target: "enchufe Memo", on: false } },
+    { name: "automation_schedule", args: scheduled }
+  ]);
+});
+
+test("apágate controla exclusivamente el enchufe asociado al satélite", async () => {
+  let turn = 0;
+  const calls = [];
+  const client = { async chat(messages) {
+    turn += 1;
+    assert.match(messages[0].content, /switch\.enchufe_memo/);
+    return { message: turn === 1
+      ? toolCall("home_set_power", { target: "switch.enchufe_memo", on: false })
+      : { role: "assistant", content: "Apagando este satélite." } };
+  } };
+  const tools = {
+    definitions: () => [{ function: { name: "home_list_devices" } }],
+    async execute(name, args) { calls.push({ name, args }); return { status: "ok" }; }
+  };
+
+  await new AssistantAgent({ client, tools, log: () => {} }).respond("Apágate", {
+    satelliteId: "memo", connectedPowerDeviceId: "switch.enchufe_memo"
+  });
+
+  assert.deepEqual(calls, [{
+    name: "home_set_power", args: { target: "switch.enchufe_memo", on: false }
+  }]);
+});
+
+test("apágate en media hora programa el enchufe asociado sin apagarlo inmediatamente", async () => {
+  let turn = 0;
+  const calls = [];
+  const scheduled = {
+    delaySeconds: 1800,
+    actions: [{ type: "home_set_power", target: "switch.enchufe_memo", on: false }]
+  };
+  const client = { async chat() {
+    turn += 1;
+    return { message: turn === 1
+      ? toolCall("automation_schedule", scheduled)
+      : { role: "assistant", content: "Programé el apagado en media hora." } };
+  } };
+  const tools = {
+    definitions: () => [
+      { function: { name: "home_list_devices" } },
+      { function: { name: "automation_schedule" } }
+    ],
+    async execute(name, args) { calls.push({ name, args }); return { status: "scheduled" }; }
+  };
+
+  await new AssistantAgent({ client, tools, log: () => {} }).respond("Apágate en media hora", {
+    satelliteId: "memo", connectedPowerDeviceId: "switch.enchufe_memo"
+  });
+
+  assert.deepEqual(calls, [{ name: "automation_schedule", args: scheduled }]);
+});
+
+test("apágate a una hora concreta consulta el tiempo y programa el enchufe asociado", async () => {
+  let turn = 0;
+  const calls = [];
+  const scheduled = {
+    triggerAt: "2026-07-23T23:55:00-04:00",
+    actions: [{ type: "home_set_power", target: "switch.enchufe_memo", on: false }]
+  };
+  const client = { async chat() {
+    turn += 1;
+    if (turn === 1) return { message: toolCall("datetime_get_current", {}) };
+    if (turn === 2) return { message: toolCall("automation_schedule", scheduled) };
+    return { message: { role: "assistant", content: "Programé el apagado para las 23:55." } };
+  } };
+  const tools = {
+    definitions: () => [
+      { function: { name: "home_list_devices" } },
+      { function: { name: "automation_schedule" } }
+    ],
+    async execute(name, args) {
+      calls.push({ name, args });
+      return name === "datetime_get_current"
+        ? { iso: "2026-07-23T19:30:00-04:00" }
+        : { status: "scheduled" };
+    }
+  };
+
+  await new AssistantAgent({ client, tools, log: () => {} }).respond("Apágate a las 23:55", {
+    satelliteId: "memo", connectedPowerDeviceId: "switch.enchufe_memo"
+  });
+
+  assert.deepEqual(calls, [
+    { name: "datetime_get_current", args: {} },
+    { name: "automation_schedule", args: scheduled }
+  ]);
 });
 
 test("mantiene un fallback local sólo para pausa de emergencia", async () => {

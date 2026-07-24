@@ -99,6 +99,10 @@
         <form id="assistant-form" class="assistant-form">
           <label for="assistant-name" class="form-label fs-5">Nombre o frase de activación</label>
           <input id="assistant-name" class="assistant-name-input" name="name" type="text" minlength="2" maxlength="40" autocomplete="off" required>
+          <label for="connected-power-device" class="form-label fs-5">Conectado a Enchufe</label>
+          <select id="connected-power-device" class="assistant-name-input" name="connectedPowerDeviceId">
+            <option value="">Ninguno</option>
+          </select>
           <label class="switch-row"><span><strong>Activación por nombre</strong><small>Escucha continuamente la palabra de activación. Desactívala para ahorrar CPU y memoria; el botón de micrófono seguirá disponible.</small></span><input id="wake-word-enabled" type="checkbox" role="switch" checked></label>
           <button class="save-button" type="submit">Validar y guardar</button>
         </form>

@@ -36,6 +36,19 @@ test("music_play fuerza orden normal al reproducir un álbum completo", async ()
   assert.equal(received.shuffle, false);
 });
 
+test("music_play conserva el ranking al pedir las más populares", async () => {
+  let received;
+  const tool = createPlayMusicTool({ music: { async play(command) {
+    received = command;
+    return { status: "playing", item: { name: "Queen" }, destination: { name: "DMP-A6" } };
+  } } });
+
+  await tool.execute({ query: "Queen", mode: "popular" });
+
+  assert.equal(received.mode, "popular");
+  assert.equal(received.shuffle, false);
+});
+
 test("music_play admite el modo radio para resolver emisoras de la biblioteca", async () => {
   let received;
   const tool = createPlayMusicTool({ music: { async play(command) {

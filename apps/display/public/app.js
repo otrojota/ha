@@ -4,7 +4,7 @@ const elements = Object.fromEntries([
   "playback-volume", "playback-volume-value", "playback-previous", "playback-toggle", "playback-next", "playback-controls-status",
   "input-summary", "output-summary", "audio-title", "audio-help", "audio-status", "device-list",
   "channel-status", "channel-list", "audio-level-db", "audio-level-bar", "audio-level-peak", "conversation-panel", "listening-indicator", "listening-label",
-  "assistant-summary", "assistant-form", "assistant-name", "assistant-status"
+  "assistant-summary", "assistant-form", "assistant-name", "assistant-status", "connected-power-device"
   , "wake-word-enabled", "manual-listen"
   , "voice-summary", "voice-status", "voice-list"
   , "location-summary", "location-form", "location-city", "location-region", "location-country",
@@ -580,10 +580,39 @@ async function loadAssistantConfig() {
     elements["assistant-summary"].textContent = `${config.name} · ${config.wakeWordEnabled !== false ? "activación automática" : "sólo botón"}`;
     elements["assistant-name"].value = config.name;
     elements["wake-word-enabled"].checked = config.wakeWordEnabled !== false;
+    await loadConnectedPowerDevices(config.connectedPowerDeviceId);
     return true;
   } catch (error) {
     elements["assistant-status"].textContent = "No se pudo cargar la configuración del asistente.";
     return false;
+  }
+}
+
+async function loadConnectedPowerDevices(selectedId = null) {
+  const select = elements["connected-power-device"];
+  const none = new Option("Ninguno", "");
+  try {
+    const catalog = await homeRequest("/devices", { cache: "no-store" });
+    const switches = (catalog.devices || [])
+      .filter((device) => device.domain === "switch" && device.enabled !== false)
+      .sort((left, right) => [left.room || "", left.name || ""].join("/").localeCompare(
+        [right.room || "", right.name || ""].join("/"), "es", { sensitivity: "base" }
+      ));
+    const options = switches.map((device) => new Option(
+      `${device.name}${device.room ? ` · ${device.room}` : ""}`,
+      device.entityId || device.id
+    ));
+    if (selectedId && !switches.some((device) => (device.entityId || device.id) === selectedId)) {
+      options.unshift(new Option(`${selectedId} · no disponible`, selectedId));
+    }
+    select.replaceChildren(none, ...options);
+    select.value = selectedId || "";
+    select.disabled = false;
+  } catch {
+    if (selectedId) select.replaceChildren(none, new Option(`${selectedId} · no disponible`, selectedId));
+    else select.replaceChildren(none);
+    select.value = selectedId || "";
+    select.disabled = false;
   }
 }
 
@@ -598,13 +627,15 @@ async function saveAssistantName(event) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         name: elements["assistant-name"].value,
-        wakeWordEnabled: elements["wake-word-enabled"].checked
+        wakeWordEnabled: elements["wake-word-enabled"].checked,
+        connectedPowerDeviceId: elements["connected-power-device"].value || null
       })
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.message || `HTTP ${response.status}`);
     elements["assistant-name"].value = result.config.name;
     elements["wake-word-enabled"].checked = result.config.wakeWordEnabled !== false;
+    elements["connected-power-device"].value = result.config.connectedPowerDeviceId || "";
     elements["assistant-summary"].textContent = `${result.config.name} · ${result.config.wakeWordEnabled !== false ? "activación automática" : "sólo botón"}`;
     elements["assistant-status"].textContent = result.config.wakeWordEnabled
       ? `Configuración guardada. Di “${result.config.name}” o toca el micrófono.`

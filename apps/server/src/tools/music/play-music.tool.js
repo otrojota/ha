@@ -9,14 +9,14 @@ export function createPlayMusicTool({ music }) {
       type: "function",
       function: {
         name: "music_play",
-        description: "Reproduce música o radio. Usa mode=radio cuando se pida una emisora: busca exclusivamente entre las radios agregadas a la biblioteca de Music Assistant y selecciona automáticamente su origen. Usa mode=artist para 'música de X', mode=album para un álbum completo desde el inicio, mode=similar para 'del estilo de X', mode=playlist para una lista existente y mode=custom para una cola temporal con varios criterios. Nunca crea ni guarda playlists. Un destino mencionado queda activo persistentemente.",
+        description: "Reproduce música o radio. Usa mode=radio para una emisora guardada; mode=artist para música general de un artista recorriendo las pistas de todos sus álbumes; mode=popular para sus canciones más populares; mode=similar para canciones parecidas a una canción concreta; mode=album para un álbum completo; mode=playlist para una lista existente y mode=custom para una cola temporal. Nunca crea ni guarda playlists. Un destino mencionado queda activo persistentemente.",
         parameters: {
           type: "object",
           properties: {
             query: { type: "string", description: "Artista, estilo, descripción o nombre principal solicitado" },
             destination: { type: "string", description: "Nombre del destino en Music Assistant; omitir para usar el destino activo" },
             source: { type: "string", description: "Origen de Music Assistant mencionado, por ejemplo Tidal, Spotify o biblioteca local; omitir para usar el origen activo" },
-            mode: { type: "string", enum: ["auto", "artist", "album", "similar", "playlist", "radio", "custom"] },
+            mode: { type: "string", enum: ["auto", "artist", "popular", "album", "similar", "playlist", "radio", "custom"] },
             searches: { type: "array", items: { type: "string" }, maxItems: 12, description: "Búsquedas concretas para construir una cola temporal en mode=custom" },
             shuffle: { type: "boolean", description: "Usar orden aleatorio; normalmente true salvo petición contraria" }
           },
@@ -24,9 +24,9 @@ export function createPlayMusicTool({ music }) {
         }
       }
     },
-    async execute({ query, destination, source, mode = "auto", searches = [], shuffle = true, mediaUri }, context = {}) {
+    async execute({ query, destination, source, mode = "auto", searches = [], shuffle, mediaUri }, context = {}) {
       if (!String(query || "").trim()) throw new Error("Indica qué música reproducir");
-      const effectiveShuffle = mode === "album" ? false : shuffle;
+      const effectiveShuffle = mode === "album" ? false : mode === "popular" ? shuffle === true : shuffle !== false;
       const result = await music.play({ query, destination, mode, searches, shuffle: effectiveShuffle, ...(source ? { source } : {}), ...(mediaUri ? { mediaUri } : {}) }, context.satelliteId);
       if (result.clarificationRequired) return {
         clarificationRequired: true, query: result.query, choices: result.choices,

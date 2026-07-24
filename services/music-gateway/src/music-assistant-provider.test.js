@@ -42,6 +42,249 @@ test("desactiva shuffle antes de iniciar un álbum completo", async () => {
   assert.equal(result.item.name, "In the Flesh?");
 });
 
+test("arma y reemplaza una cola aleatoria al pedir música general de un artista", async () => {
+  const commands = [];
+  const provider = new MusicAssistantProvider({ randomImpl: () => 0, artistQueueSize: 3, fetchImpl: async (_url, options) => {
+    const request = JSON.parse(options.body);
+    commands.push(request);
+    if (request.command === "music/search") return response({ artists: [{
+      uri: "tidal://artist/pink-floyd", item_id: "pink-floyd", provider: "tidal", name: "Pink Floyd", media_type: "artist"
+    }] });
+    if (request.command === "music/artists/artist_albums") return response([
+      { uri: "tidal://album/a", item_id: "a", provider: "tidal" },
+      { uri: "tidal://album/b", item_id: "b", provider: "tidal" }
+    ]);
+    if (request.command === "music/albums/album_tracks") return response(request.args.item_id === "a" ? [
+      { uri: "tidal://track/1", name: "Uno" }, { uri: "tidal://track/2", name: "Dos" }
+    ] : [{ uri: "tidal://track/3", name: "Tres" }, { uri: "tidal://track/4", name: "Cuatro" }]);
+    if (request.command === "player_queues/play_media") return response(null);
+    if (request.command === "players/all" || request.command === "player_queues/all") return response([]);
+    throw new Error(request.command);
+  } });
+
+  await provider.play({ query: "Pink Floyd", playerId: "dmp", mode: "artist", shuffle: true });
+  await provider.artistQueueFillPromises.get("dmp");
+
+  const artistAlbums = commands.find((request) => request.command === "music/artists/artist_albums");
+  assert.deepEqual(artistAlbums.args, { item_id: "pink-floyd", provider_instance_id_or_domain: "tidal" });
+  assert.equal(commands.filter((request) => request.command === "music/albums/album_tracks").length, 2);
+  const play = commands.find((request) => request.command === "player_queues/play_media");
+  assert.equal(play.args.option, "replace");
+  assert.match(play.args.media, /^tidal:\/\/track\//);
+  assert.equal(commands.filter((request) => request.command === "player_queues/play_media").length, 3);
+  assert.equal(commands.some((request) => request.command === "player_queues/shuffle"), false);
+});
+
+test("consulta los álbumes de un artista en paralelo sin superar el límite configurado", async () => {
+  let active = 0;
+  let maximumActive = 0;
+  const albums = Array.from({ length: 12 }, (_, index) => ({
+    uri: `tidal://album/${index}`, item_id: String(index), provider: "tidal", name: `Álbum ${index}`
+  }));
+  const provider = new MusicAssistantProvider({ artistAlbumConcurrency: 4, fetchImpl: async (_url, options) => {
+    const request = JSON.parse(options.body);
+    if (request.command === "music/search") return response({ artists: [{
+      uri: "tidal://artist/pink-floyd", item_id: "pink-floyd", provider: "tidal", name: "Pink Floyd", media_type: "artist"
+    }] });
+    if (request.command === "music/artists/artist_albums") return response(albums);
+    if (request.command === "music/albums/album_tracks") {
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      active -= 1;
+      return response([{ uri: `tidal://track/${request.args.item_id}`, name: `Tema ${request.args.item_id}` }]);
+    }
+    return response({ queue_id: "speaker", current_item: { media_item: { uri: "tidal://track/0", name: "Tema 0" } } });
+  } });
+
+  await provider.play({ query: "Pink Floyd", playerId: "speaker", mode: "artist", shuffle: true });
+  await provider.artistQueueFillPromises.get("speaker");
+
+  assert.equal(maximumActive, 4);
+});
+
+test("evita repetir la primera canción y prioriza temas fuera de la lista anterior", async () => {
+  const playedQueues = [];
+  const provider = new MusicAssistantProvider({ randomImpl: () => 0, artistQueueSize: 2, fetchImpl: async (_url, options) => {
+    const request = JSON.parse(options.body);
+    if (request.command === "music/search") return response({ artists: [{
+      uri: "library://artist/42", item_id: "42", provider: "library", name: "Artista", media_type: "artist"
+    }] });
+    if (request.command === "music/artists/artist_albums") return response([
+      { uri: "library://album/1", name: "Uno" }, { uri: "library://album/2", name: "Dos" }
+    ]);
+    if (request.command === "music/albums/album_tracks") return response(request.args.item_id === "1" ? [
+      { uri: "library://track/1", name: "Uno" }, { uri: "library://track/2", name: "Dos" }
+    ] : [{ uri: "library://track/3", name: "Tres" }, { uri: "library://track/4", name: "Cuatro" }]);
+    if (request.command === "player_queues/play_media") { playedQueues.push(request.args); return response(null); }
+    if (request.command === "players/all" || request.command === "player_queues/all") return response([]);
+    throw new Error(request.command);
+  } });
+
+  await provider.play({ query: "Artista", playerId: "speaker", mode: "artist", shuffle: true });
+  await provider.artistQueueFillPromises.get("speaker");
+  await provider.play({ query: "Artista", playerId: "speaker", mode: "artist", shuffle: true });
+  await provider.artistQueueFillPromises.get("speaker");
+
+  const replacements = playedQueues.filter((entry) => entry.option === "replace").map((entry) => entry.media);
+  assert.equal(replacements.length, 2);
+  assert.notEqual(replacements[1], replacements[0]);
+});
+
+test("cancela el rellenado anterior cuando una nueva reproducción reemplaza la cola", async () => {
+  const queueCommands = [];
+  let releaseOldAlbum;
+  let oldAlbumStarted;
+  const oldAlbumPending = new Promise((resolve) => { oldAlbumStarted = resolve; });
+  const provider = new MusicAssistantProvider({ randomImpl: () => 0.999, fetchImpl: async (_url, options) => {
+    const request = JSON.parse(options.body);
+    if (request.command === "music/search") return response({ artists: [{
+      uri: `tidal://artist/${request.args.search_query}`, item_id: request.args.search_query,
+      provider: "tidal", name: request.args.search_query, media_type: "artist"
+    }] });
+    if (request.command === "music/artists/artist_albums") return response(request.args.item_id === "Anterior"
+      ? [{ uri: "tidal://album/a1" }, { uri: "tidal://album/a2" }]
+      : [{ uri: "tidal://album/b1" }]);
+    if (request.command === "music/albums/album_tracks" && request.args.item_id === "a2") {
+      oldAlbumStarted();
+      return new Promise((resolve) => { releaseOldAlbum = () => resolve(response([{ uri: "tidal://track/a2", name: "A2" }])); });
+    }
+    if (request.command === "music/albums/album_tracks") return response([{
+      uri: `tidal://track/${request.args.item_id}`, name: request.args.item_id
+    }]);
+    if (request.command === "player_queues/play_media") { queueCommands.push(request.args); return response(null); }
+    throw new Error(request.command);
+  } });
+
+  await provider.play({ query: "Anterior", playerId: "speaker", mode: "artist" });
+  const oldFill = provider.artistQueueFillPromises.get("speaker");
+  await oldAlbumPending;
+  await provider.play({ query: "Nueva", playerId: "speaker", mode: "artist" });
+  releaseOldAlbum();
+  await oldFill;
+
+  const lastReplace = queueCommands.findLastIndex((entry) => entry.option === "replace");
+  assert.equal(queueCommands[lastReplace].media, "tidal://track/b1");
+  assert.equal(queueCommands.slice(lastReplace + 1).some((entry) => entry.media === "tidal://track/a2"), false);
+});
+
+test("usa el mapping del origen activo y omite álbumes retirados sin abortar la discografía", async () => {
+  const commands = [];
+  const warnings = [];
+  const provider = new MusicAssistantProvider({ log: (...args) => warnings.push(args), fetchImpl: async (_url, options) => {
+    const request = JSON.parse(options.body); commands.push(request);
+    if (request.command === "music/search") return response({ artists: [{
+      uri: "library://artist/31", item_id: "31", provider: "library", name: "31 Minutos", media_type: "artist",
+      provider_mappings: [{ item_id: "spotify-31", provider_instance: "spotify--home", provider_domain: "spotify", available: true }]
+    }] });
+    if (request.command === "music/artists/artist_albums") return response([
+      { uri: "library://album/bad", name: "Retirado", provider_mappings: [
+        { item_id: "tidal-bad", provider_instance: "tidal--home", provider_domain: "tidal", available: true },
+        { item_id: "spotify-bad", provider_instance: "spotify--home", provider_domain: "spotify", available: true }
+      ] },
+      { uri: "library://album/good", name: "Disponible", provider_mappings: [
+        { item_id: "spotify-good", provider_instance: "spotify--home", provider_domain: "spotify", available: true }
+      ] }
+    ]);
+    if (request.command === "music/albums/album_tracks" && request.args.item_id === "spotify-bad") {
+      return { ok: false, status: 500, json: async () => ({ error: { message: "MediaNotFoundError: álbum retirado" } }) };
+    }
+    if (request.command === "music/albums/album_tracks") return response([{ uri: "spotify://track/good", name: "Mi equilibrio espiritual" }]);
+    if (request.command === "player_queues/play_media") return response(null);
+    if (request.command === "players/all" || request.command === "player_queues/all") return response([]);
+    throw new Error(request.command);
+  } });
+
+  await provider.play({ query: "31 Minutos", playerId: "speaker", sourceId: "spotify--home", mode: "artist", shuffle: true });
+  await provider.artistQueueFillPromises.get("speaker");
+
+  const albumsLookup = commands.find((request) => request.command === "music/artists/artist_albums");
+  assert.deepEqual(albumsLookup.args, { item_id: "spotify-31", provider_instance_id_or_domain: "spotify--home" });
+  assert.deepEqual(commands.filter((request) => request.command === "music/albums/album_tracks")
+    .map((request) => request.args.provider_instance_id_or_domain), ["spotify--home", "spotify--home"]);
+  assert.equal(commands.find((request) => request.command === "player_queues/play_media").args.media, "spotify://track/good");
+  assert.match(warnings[0][2].error, /MediaNotFoundError/);
+});
+
+test("informa el detalle real cuando ningún álbum del artista está disponible", async () => {
+  const provider = new MusicAssistantProvider({ fetchImpl: async (_url, options) => {
+    const request = JSON.parse(options.body);
+    if (request.command === "music/search") return response({ artists: [{ uri: "tidal://artist/31", name: "31 Minutos", media_type: "artist" }] });
+    if (request.command === "music/artists/artist_albums") return response([{ uri: "tidal://album/bad", name: "Retirado" }]);
+    if (request.command === "music/albums/album_tracks") return {
+      ok: false, status: 500, json: async () => ({ error: { details: "MediaNotFoundError: Item not found" } })
+    };
+    throw new Error(request.command);
+  } });
+
+  await assert.rejects(provider.play({ query: "31 Minutos", playerId: "speaker", mode: "artist", shuffle: true }),
+    /no pudo leer los álbumes.*MediaNotFoundError: Item not found/);
+});
+
+test("usa las pistas destacadas de MA para las más populares de un artista", async () => {
+  const commands = [];
+  const provider = new MusicAssistantProvider({ fetchImpl: async (_url, options) => {
+    const request = JSON.parse(options.body); commands.push(request);
+    if (request.command === "music/search") return response({ artists: [{ uri: "tidal://artist/queen", name: "Queen", media_type: "artist" }] });
+    if (request.command === "music/artists/artist_tracks") return response([
+      { uri: "tidal://track/bohemian", name: "Bohemian Rhapsody" }, { uri: "tidal://track/radio", name: "Radio Ga Ga" }
+    ]);
+    if (request.command === "player_queues/play_media") return response(null);
+    if (request.command === "players/all" || request.command === "player_queues/all") return response([]);
+    throw new Error(request.command);
+  } });
+
+  await provider.play({ query: "Queen", playerId: "speaker", mode: "popular", shuffle: false });
+
+  assert.deepEqual(commands.find((request) => request.command === "music/search").args.media_types, ["artist"]);
+  assert.deepEqual(commands.find((request) => request.command === "player_queues/play_media").args.media,
+    ["tidal://track/bohemian", "tidal://track/radio"]);
+  assert.equal(commands.some((request) => request.command === "music/artists/artist_albums"), false);
+});
+
+test("reemplaza la cola con canciones parecidas entregadas por MA", async () => {
+  const commands = [];
+  const provider = new MusicAssistantProvider({ fetchImpl: async (_url, options) => {
+    const request = JSON.parse(options.body); commands.push(request);
+    if (request.command === "music/search") return response({ tracks: [{ uri: "tidal://track/seed", name: "Semilla", media_type: "track" }] });
+    if (request.command === "music/tracks/similar_tracks") return response([
+      { uri: "tidal://track/similar-1", name: "Parecida 1" }, { uri: "tidal://track/similar-2", name: "Parecida 2" }
+    ]);
+    if (request.command === "player_queues/play_media") return response(null);
+    if (request.command === "players/all" || request.command === "player_queues/all") return response([]);
+    throw new Error(request.command);
+  } });
+
+  await provider.play({ query: "Semilla", playerId: "speaker", sourceId: "tidal--home", mode: "similar", shuffle: false });
+
+  const similar = commands.find((request) => request.command === "music/tracks/similar_tracks");
+  assert.deepEqual(similar.args.preferred_provider_instances, ["tidal--home"]);
+  assert.equal(similar.args.allow_lookup, true);
+  assert.deepEqual(commands.find((request) => request.command === "player_queues/play_media").args.media,
+    ["tidal://track/similar-1", "tidal://track/similar-2"]);
+});
+
+test("respeta canción y álbum específicos sin construir una cola de artista", async () => {
+  const commands = [];
+  const provider = new MusicAssistantProvider({ fetchImpl: async (_url, options) => {
+    const request = JSON.parse(options.body);
+    commands.push(request);
+    if (request.command === "music/search") return response(request.args.media_types[0] === "album"
+      ? { albums: [{ uri: "tidal://album/1", name: "Disco", media_type: "album" }] }
+      : { tracks: [{ uri: "tidal://track/1", name: "Canción", media_type: "track" }] });
+    if (request.command === "player_queues/play_media" || request.command === "player_queues/shuffle") return response(null);
+    if (request.command === "players/all" || request.command === "player_queues/all") return response([]);
+    throw new Error(request.command);
+  } });
+
+  await provider.play({ query: "Canción", playerId: "speaker", mode: "auto", shuffle: true });
+  await provider.play({ query: "Disco", playerId: "speaker", mode: "album", shuffle: false });
+
+  assert.equal(commands.some((request) => request.command === "music/artists/artist_tracks"), false);
+  assert.deepEqual(commands.filter((request) => request.command === "player_queues/play_media").map((request) => request.args.media),
+    ["tidal://track/1", "tidal://album/1"]);
+});
+
 test("avanza la cola activa y sólo confirma cuando cambió el elemento", async () => {
   let advanced = false;
   const commands = [];
@@ -63,6 +306,46 @@ test("avanza la cola activa y sólo confirma cuando cambió el elemento", async 
   assert.equal(result.previousItem.name, "Uno");
   assert.deepEqual(commands.find((item) => item.command === "player_queues/next").args, { queue_id: "speaker" });
   assert.equal(commands.some((item) => item.command === "players/cmd/next"), false);
+});
+
+test("reanuda la cola existente sin reemplazarla", async () => {
+  const commands = [];
+  const provider = new MusicAssistantProvider({ fetchImpl: async (_url, options) => {
+    const request = JSON.parse(options.body); commands.push(request);
+    if (request.command === "player_queues/all") return response([{ queue_id: "speaker", state: "paused", current_index: 2,
+      current_item: { media_item: { uri: "library://track/3", name: "Tres" } } }]);
+    if (request.command === "players/cmd/play") return response(null);
+    if (request.command === "players/all") return response([{ player_id: "speaker", name: "Satélite", playback_state: "playing" }]);
+    throw new Error(request.command);
+  } });
+
+  await provider.resume("speaker");
+
+  assert.equal(commands.some((request) => request.command === "players/cmd/play"), true);
+  assert.equal(commands.some((request) => request.command === "music/recently_played_items"), false);
+});
+
+test("recupera una reproducción reciente cuando el parlante no tiene cola", async () => {
+  const commands = [];
+  let hasQueue = false;
+  const provider = new MusicAssistantProvider({ fetchImpl: async (_url, options) => {
+    const request = JSON.parse(options.body); commands.push(request);
+    if (request.command === "player_queues/all") return response(hasQueue
+      ? [{ queue_id: "speaker", state: "playing", current_index: 0, current_item: { media_item: { uri: "library://track/recent", name: "Reciente" } } }]
+      : [{ queue_id: "speaker", state: "idle", current_index: null, current_item: null }]);
+    if (request.command === "music/recently_played_items") return response(request.args.queue_id
+      ? [] : [{ uri: "library://track/recent", name: "Reciente", media_type: "track" }]);
+    if (request.command === "player_queues/play_media") { hasQueue = true; return response(null); }
+    if (request.command === "players/all") return response([{ player_id: "speaker", name: "Satélite", playback_state: "playing" }]);
+    throw new Error(request.command);
+  } });
+
+  const result = await provider.resume("speaker");
+
+  assert.equal(result.item.name, "Reciente");
+  assert.deepEqual(commands.filter((request) => request.command === "music/recently_played_items").map((request) => request.args.queue_id),
+    ["speaker", undefined]);
+  assert.equal(commands.find((request) => request.command === "player_queues/play_media").args.media, "library://track/recent");
 });
 
 test("describe la canción actual y las próximas desde la cola", async () => {
@@ -95,6 +378,8 @@ test("limita la búsqueda al origen activo de Music Assistant", async () => {
       searchProviders = request.args.providers;
       return response({ artists: [{ uri: "tidal://artist/1", name: "Peter Gabriel", media_type: "artist" }] });
     }
+    if (request.command === "music/artists/artist_albums") return response([{ uri: "tidal://album/1" }]);
+    if (request.command === "music/albums/album_tracks") return response([{ uri: "tidal://track/1", name: "Solsbury Hill" }]);
     if (request.command === "player_queues/play_media") return response(null);
     if (request.command === "players/all") return response([]);
     if (request.command === "player_queues/all") return response([]);
@@ -250,6 +535,8 @@ test("solicita aclaración cuando una letra hablada coincide con nombres de arti
       { uri: "tidal://artist/project-j", name: "Proyecto J", media_type: "artist" },
       { uri: "tidal://artist/proyecto-jota", name: "Proyecto Jota", media_type: "artist" }
     ] });
+    if (request.command === "music/artists/artist_albums") return response([{ uri: "tidal://album/one" }]);
+    if (request.command === "music/albums/album_tracks") return response([{ uri: "tidal://track/one", name: "One" }]);
     throw new Error(`No debía ejecutar ${request.command}`);
   } });
 
@@ -268,6 +555,8 @@ test("reproduce directamente una coincidencia escrita exacta aunque exista un no
       { uri: "tidal://artist/project-j", name: "Proyecto J", media_type: "artist" },
       { uri: "tidal://artist/proyecto-jota", name: "Proyecto Jota", media_type: "artist" }
     ] });
+    if (request.command === "music/artists/artist_albums") return response([{ uri: "tidal://album/one" }]);
+    if (request.command === "music/albums/album_tracks") return response([{ uri: "tidal://track/one", name: "One" }]);
     if (request.command === "player_queues/play_media") return response(null);
     if (request.command === "players/all") return response([]);
     if (request.command === "player_queues/all") return response([]);
@@ -285,6 +574,8 @@ test("no repite ni declara fallida una reproducción aceptada si demora leer el 
     const request = JSON.parse(options.body);
     commands.push(request.command);
     if (request.command === "music/search") return response({ artists: [{ uri: "spotify://artist/pink", name: "Pink Floyd", media_type: "artist" }] });
+    if (request.command === "music/artists/artist_albums") return response([{ uri: "spotify://album/one" }]);
+    if (request.command === "music/albums/album_tracks") return response([{ uri: "spotify://track/one", name: "One" }]);
     if (request.command === "player_queues/play_media" || request.command === "player_queues/shuffle") return response(null);
     throw new Error("estado temporalmente no disponible");
   } });
@@ -293,7 +584,7 @@ test("no repite ni declara fallida una reproducción aceptada si demora leer el 
 
   assert.equal(commands.filter((command) => command === "player_queues/play_media").length, 1);
   assert.equal(result.status, "playing");
-  assert.equal(result.item.name, "Pink Floyd");
+  assert.equal(result.item.name, "One");
   assert.equal(result.statePending, true);
 });
 

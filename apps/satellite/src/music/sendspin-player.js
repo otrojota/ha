@@ -1,11 +1,17 @@
-import { spawn } from "node:child_process";
+import { execFile as execFileCallback, spawn } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFile = promisify(execFileCallback);
 
 export class SendspinPlayer {
-  constructor({ executable = "sendspin", satelliteId, serverUrl = "", log = () => {} }) {
+  constructor({ executable = "sendspin", satelliteId, serverUrl = "", log = () => {}, platform = process.platform, run = execFile, spawnProcess = spawn }) {
     this.executable = executable;
     this.satelliteId = satelliteId;
     this.serverUrl = serverUrl;
     this.log = log;
+    this.platform = platform;
+    this.run = run;
+    this.spawnProcess = spawnProcess;
     this.process = null;
     this.stopping = false;
     this.lastError = null;
@@ -23,12 +29,17 @@ export class SendspinPlayer {
     // El nombre visible y editable es propiedad de Music Assistant.
     const name = String(config.registrationName || "").trim() || `HA Satellite ${this.satelliteId}`;
     const args = ["daemon", "--id", `ha-${this.satelliteId}`, "--name", name, "--manufacturer", "HA Voice Assistant", "--product-name", "Satellite Speaker"];
-    const device = String(config.musicOutputDeviceId || "").trim();
-    if (device) args.push("--audio-device", device);
+    const configuredDevice = String(config.musicOutputDeviceId || "").trim();
+    let sendspinDevice = configuredDevice;
+    if (this.platform === "linux" && configuredDevice) {
+      await this.run("pactl", ["set-default-sink", configuredDevice]);
+      sendspinDevice = "pulse";
+    }
+    if (sendspinDevice) args.push("--audio-device", sendspinDevice);
     if (this.serverUrl) args.push("--url", this.serverUrl);
     this.stopping = false;
     this.lastError = null;
-    const child = spawn(this.executable, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const child = this.spawnProcess(this.executable, args, { stdio: ["ignore", "pipe", "pipe"] });
     this.process = child;
     child.stdout.on("data", (data) => this.log("info", "Sendspin", { message: data.toString().trim() }));
     child.stderr.on("data", (data) => this.log("warn", "Sendspin", { message: data.toString().trim() }));
@@ -52,7 +63,7 @@ export class SendspinPlayer {
       this.lastError = error.message;
       throw error;
     });
-    this.log("info", "Reproductor Music Assistant iniciado", { name, clientId: `ha-${this.satelliteId}`, outputDevice: device || "predeterminado", discovery: this.serverUrl || "mDNS" });
+    this.log("info", "Reproductor Music Assistant iniciado", { name, clientId: `ha-${this.satelliteId}`, outputDevice: configuredDevice || "predeterminado", sendspinDevice: sendspinDevice || "predeterminado", discovery: this.serverUrl || "mDNS" });
     return this.status(config);
   }
 

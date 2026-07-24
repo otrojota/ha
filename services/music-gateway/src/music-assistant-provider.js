@@ -50,6 +50,41 @@ function sameMediaItem(current, selected) {
   return normalizeText(itemName(current)) === normalizeText(itemName(selected));
 }
 
+function mediaReference(item, mediaType, preferredProvider) {
+  const mappings = Array.isArray(item?.provider_mappings) ? item.provider_mappings : [];
+  const preferredMapping = preferredProvider && mappings.find((mapping) =>
+    mapping?.provider_instance === preferredProvider || mapping?.provider_domain === preferredProvider);
+  if (preferredMapping?.item_id) return {
+    itemId: String(preferredMapping.item_id),
+    provider: String(preferredMapping.provider_instance || preferredMapping.provider_domain)
+  };
+  if (item?.item_id && item?.provider && (!preferredProvider || item.provider !== "library")) {
+    return { itemId: String(item.item_id), provider: String(item.provider) };
+  }
+  const availableMapping = mappings.find((mapping) => mapping?.available !== false && mapping?.item_id);
+  if (availableMapping) return {
+    itemId: String(availableMapping.item_id),
+    provider: String(availableMapping.provider_instance || availableMapping.provider_domain)
+  };
+  if (item?.item_id && item?.provider) return { itemId: String(item.item_id), provider: String(item.provider) };
+  const match = String(item?.uri || "").match(new RegExp(`^([^:]+):\\/\\/${mediaType}\\/(.+)$`));
+  return match ? { itemId: match[2], provider: match[1] } : null;
+}
+
+function apiErrorMessage(payload, fallback) {
+  const error = payload?.error;
+  return payload?.details || payload?.message || (typeof error === "string" ? error : error?.details || error?.message) || fallback;
+}
+
+function shuffled(items, random) {
+  const result = [...items];
+  for (let index = result.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(random() * (index + 1));
+    [result[index], result[swapIndex]] = [result[swapIndex], result[index]];
+  }
+  return result;
+}
+
 function radioSearchQueries(query) {
   const original = String(query || "").trim();
   const withoutType = original.replace(/^\s*(?:la\s+)?(?:radio|emisora|estaci[oó]n)\s+/i, "").trim();
@@ -129,13 +164,24 @@ function ambiguousChoices(query, matches) {
 }
 
 export class MusicAssistantProvider {
-  constructor({ baseUrl = "http://127.0.0.1:8095", token = "", fetchImpl = fetch, timeoutMs = 15_000 }) {
+  constructor({ baseUrl = "http://127.0.0.1:8095", token = "", fetchImpl = fetch, timeoutMs = 15_000,
+    randomImpl = Math.random, artistQueueSize = 50, artistAlbumConcurrency = 4,
+    artistAlbumTimeoutMs = 8_000, log = () => {} }) {
     this.baseUrl = baseUrl.replace(/\/$/, "");
     this.token = token;
     this.fetch = fetchImpl;
     this.timeoutMs = timeoutMs;
     this.messageId = 0;
     this.authenticationRequired = !String(token || "").trim();
+    this.random = randomImpl;
+    this.artistQueueSize = artistQueueSize;
+    this.artistAlbumConcurrency = Math.max(1, artistAlbumConcurrency);
+    this.artistAlbumTimeoutMs = Math.max(1_000, artistAlbumTimeoutMs);
+    this.previousArtistQueues = new Map();
+    this.queueGenerations = new Map();
+    this.queueMutationChains = new Map();
+    this.artistQueueFillPromises = new Map();
+    this.log = log;
   }
 
   setToken(token) {
@@ -166,7 +212,7 @@ export class MusicAssistantProvider {
     }
   }
 
-  async command(command, args = {}) {
+  async command(command, args = {}, { timeoutMs = this.timeoutMs } = {}) {
     const response = await this.fetch(`${this.baseUrl}/api`, {
       method: "POST",
       headers: {
@@ -174,7 +220,7 @@ export class MusicAssistantProvider {
         ...(this.token ? { Authorization: `Bearer ${this.token}` } : {})
       },
       body: JSON.stringify({ message_id: String(++this.messageId), command, args }),
-      signal: AbortSignal.timeout(this.timeoutMs)
+      signal: AbortSignal.timeout(timeoutMs)
     });
     const payload = await response.json().catch(() => ({}));
     if (response.status === 401) {
@@ -184,8 +230,8 @@ export class MusicAssistantProvider {
       error.code = "MUSIC_ASSISTANT_AUTH_REQUIRED";
       throw error;
     }
-    if (!response.ok) throw new Error(payload?.details || payload?.message || payload?.error || `Music Assistant respondió HTTP ${response.status}`);
-    if (payload?.error_code || payload?.error) throw new Error(payload.details || payload.message || payload.error || "Music Assistant rechazó la solicitud");
+    if (!response.ok) throw new Error(apiErrorMessage(payload, `Music Assistant respondió HTTP ${response.status}`));
+    if (payload?.error_code || payload?.error) throw new Error(apiErrorMessage(payload, "Music Assistant rechazó la solicitud"));
     return payload && Object.hasOwn(payload, "result") ? payload.result : payload;
   }
 
@@ -255,6 +301,226 @@ export class MusicAssistantProvider {
     return mediaTypes.flatMap((type) => result[`${type}s`] || result[type] || []);
   }
 
+  selectTrackQueue(tracks, historyKey, shuffle) {
+    const unique = [...new Map((tracks || []).filter((track) => track?.uri)
+      .map((track) => [track.uri, track])).values()];
+    if (!unique.length) return [];
+    if (!shuffle) return unique.slice(0, this.artistQueueSize).map((track) => track.uri);
+    const previous = this.previousArtistQueues.get(historyKey) || [];
+    const previousSet = new Set(previous);
+    const candidates = shuffled(unique, this.random);
+    const ordered = [
+      ...candidates.filter((track) => !previousSet.has(track.uri)),
+      ...candidates.filter((track) => previousSet.has(track.uri))
+    ];
+    const selected = ordered.slice(0, this.artistQueueSize);
+    if (selected.length > 1 && selected[0].uri === previous[0]) {
+      [selected[0], selected[1]] = [selected[1], selected[0]];
+    }
+    const uris = selected.map((track) => track.uri);
+    this.previousArtistQueues.set(historyKey, uris);
+    return uris;
+  }
+
+  async getArtistTracks(artist) {
+    const reference = mediaReference(artist, "artist");
+    if (!reference) throw new Error("Music Assistant no informó cómo consultar las canciones del artista");
+    return this.command("music/artists/artist_tracks", {
+      item_id: reference.itemId,
+      provider_instance_id_or_domain: reference.provider
+    });
+  }
+
+  async buildPopularArtistQueue(artist, shuffle) {
+    const reference = mediaReference(artist, "artist");
+    const historyKey = artist.uri || `${reference?.provider}:${reference?.itemId}`;
+    const uris = this.selectTrackQueue(await this.getArtistTracks(artist), `popular:${historyKey}`, shuffle);
+    if (!uris.length) throw new Error(`Music Assistant no encontró canciones populares de “${itemName(artist)}”`);
+    return uris;
+  }
+
+  beginQueueGeneration(playerId) {
+    const generation = (this.queueGenerations.get(playerId) || 0) + 1;
+    this.queueGenerations.set(playerId, generation);
+    return generation;
+  }
+
+  isCurrentQueueGeneration(playerId, generation) {
+    return this.queueGenerations.get(playerId) === generation;
+  }
+
+  async mutateQueue(playerId, generation, operation) {
+    const previous = this.queueMutationChains.get(playerId) || Promise.resolve();
+    const current = previous.catch(() => {}).then(async () => {
+      if (!this.isCurrentQueueGeneration(playerId, generation)) return false;
+      await operation();
+      return true;
+    });
+    this.queueMutationChains.set(playerId, current);
+    try {
+      return await current;
+    } finally {
+      if (this.queueMutationChains.get(playerId) === current) this.queueMutationChains.delete(playerId);
+    }
+  }
+
+  async albumTracks(album, sourceId) {
+    const reference = mediaReference(album, "album", sourceId);
+    if (!reference) return [];
+    return this.command("music/albums/album_tracks", {
+      item_id: reference.itemId,
+      provider_instance_id_or_domain: reference.provider
+    }, { timeoutMs: Math.min(this.timeoutMs, this.artistAlbumTimeoutMs) });
+  }
+
+  async playArtistProgressively(artist, playerId, sourceId, generation) {
+    const reference = mediaReference(artist, "artist", sourceId);
+    if (!reference) throw new Error("Music Assistant no informó cómo consultar los álbumes del artista");
+    const albums = shuffled(await this.command("music/artists/artist_albums", {
+      item_id: reference.itemId,
+      provider_instance_id_or_domain: reference.provider
+    }), this.random);
+    const failures = [];
+    let initialAlbum;
+    let initialTracks = [];
+    while (albums.length && !initialTracks.length) {
+      initialAlbum = albums.shift();
+      try {
+        initialTracks = (await this.albumTracks(initialAlbum, sourceId)).filter((track) => track?.uri);
+      } catch (error) {
+        failures.push(error);
+        this.log("warn", "Se omitió un álbum al buscar la primera canción del artista", {
+          artist: itemName(artist), album: itemName(initialAlbum), error: error.message
+        });
+      }
+    }
+    if (!initialTracks.length) {
+      let fallback = [];
+      try {
+        fallback = (await this.getArtistTracks(artist)).filter((track) => track?.uri);
+      } catch (error) {
+        failures.push(error);
+      }
+      if (!fallback.length) throw new Error(failures[0]?.message
+        ? `Music Assistant no pudo leer los álbumes de “${itemName(artist)}”: ${failures[0].message}`
+        : `Music Assistant no encontró pistas de “${itemName(artist)}”`);
+      initialTracks = fallback;
+    }
+    const historyKey = artist.uri || `${reference.provider}:${reference.itemId}`;
+    const previousFirst = this.previousArtistQueues.get(`progressive:${historyKey}`)?.[0];
+    const randomizedInitialTracks = shuffled(initialTracks, this.random);
+    const firstTrack = randomizedInitialTracks.find((track) => track.uri !== previousFirst) || randomizedInitialTracks[0];
+    this.previousArtistQueues.set(`progressive:${historyKey}`, [firstTrack.uri]);
+    const replaced = await this.mutateQueue(playerId, generation, () => this.command("player_queues/play_media", {
+      queue_id: playerId, media: firstTrack.uri, option: "replace"
+    }));
+    if (!replaced) throw new Error("La solicitud musical fue reemplazada por una más reciente");
+
+    const fill = this.fillArtistQueueInBackground({
+      artist, playerId, sourceId, generation, albums,
+      firstTrack, initialTracks: initialTracks.filter((track) => track.uri !== firstTrack.uri)
+    }).catch((error) => this.log("warn", "No se pudo completar la cola progresiva del artista", {
+      artist: itemName(artist), playerId, error: error.message
+    })).finally(() => {
+      if (this.artistQueueFillPromises.get(playerId) === fill) this.artistQueueFillPromises.delete(playerId);
+    });
+    this.artistQueueFillPromises.set(playerId, fill);
+    return { firstTrack, initialAlbum };
+  }
+
+  async fillArtistQueueInBackground({ artist, playerId, sourceId, generation, albums, firstTrack, initialTracks }) {
+    const seen = new Set([firstTrack.uri]);
+    const extras = shuffled(initialTracks, this.random).filter((track) => track?.uri && !seen.has(track.uri));
+    const append = async (track) => {
+      if (!track?.uri || seen.has(track.uri) || seen.size >= this.artistQueueSize) return;
+      seen.add(track.uri);
+      await this.mutateQueue(playerId, generation, () => this.command("player_queues/play_media", {
+        queue_id: playerId, media: track.uri, option: "add"
+      }));
+    };
+    const pending = [...albums];
+    const workers = Array.from({ length: Math.min(this.artistAlbumConcurrency, pending.length) }, async () => {
+      while (pending.length && this.isCurrentQueueGeneration(playerId, generation) && seen.size < this.artistQueueSize) {
+        const album = pending.shift();
+        try {
+          const tracks = shuffled((await this.albumTracks(album, sourceId)).filter((track) => track?.uri), this.random);
+          if (tracks[0]) await append(tracks[0]);
+          extras.push(...tracks.slice(1));
+        } catch (error) {
+          this.log("warn", "Se omitió un álbum al completar la cola progresiva", {
+            artist: itemName(artist), album: itemName(album), error: error.message
+          });
+        }
+      }
+    });
+    await Promise.all(workers);
+    for (const track of shuffled(extras, this.random)) {
+      if (!this.isCurrentQueueGeneration(playerId, generation) || seen.size >= this.artistQueueSize) break;
+      await append(track);
+    }
+  }
+
+  async buildArtistDiscographyQueue(artist, sourceId, shuffle) {
+    const reference = mediaReference(artist, "artist", sourceId);
+    if (!reference) throw new Error("Music Assistant no informó cómo consultar los álbumes del artista");
+    const albums = await this.command("music/artists/artist_albums", {
+      item_id: reference.itemId,
+      provider_instance_id_or_domain: reference.provider
+    });
+    const tracks = [];
+    const failures = [];
+    const pending = [...(albums || [])];
+    const worker = async () => {
+      while (pending.length) {
+        const album = pending.shift();
+        const albumReference = mediaReference(album, "album", sourceId);
+        if (!albumReference) continue;
+        try {
+          const albumTracks = await this.command("music/albums/album_tracks", {
+            item_id: albumReference.itemId,
+            provider_instance_id_or_domain: albumReference.provider
+          }, { timeoutMs: Math.min(this.timeoutMs, this.artistAlbumTimeoutMs) });
+          tracks.push(...(albumTracks || []));
+        } catch (error) {
+          failures.push(error);
+          this.log("warn", "Se omitió un álbum no disponible al construir la discografía", {
+            artist: itemName(artist), album: itemName(album), provider: albumReference.provider, error: error.message
+          });
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(this.artistAlbumConcurrency, pending.length) }, worker));
+    // Ediciones deluxe, remasters y recopilatorios suelen repetir la misma
+    // grabación. La primera aparición conserva el álbum preferido por MA.
+    const deduplicated = [...new Map(tracks.filter((track) => track?.uri && itemName(track))
+      .map((track) => [normalizeText(itemName(track)), track])).values()];
+    const historyKey = artist.uri || `${reference.provider}:${reference.itemId}`;
+    const uris = this.selectTrackQueue(deduplicated, `discography:${historyKey}`, shuffle);
+    if (!uris.length) {
+      const detail = failures[0]?.message;
+      throw new Error(detail
+        ? `Music Assistant no pudo leer los álbumes de “${itemName(artist)}”: ${detail}`
+        : `Music Assistant no encontró pistas en los álbumes de “${itemName(artist)}”`);
+    }
+    return uris;
+  }
+
+  async buildSimilarTrackQueue(track, sourceId, shuffle) {
+    const reference = mediaReference(track, "track");
+    if (!reference) throw new Error("Music Assistant no informó cómo consultar canciones parecidas");
+    const similar = await this.command("music/tracks/similar_tracks", {
+      item_id: reference.itemId,
+      provider_instance_id_or_domain: reference.provider,
+      limit: this.artistQueueSize,
+      allow_lookup: true,
+      ...(sourceId ? { preferred_provider_instances: [sourceId] } : {})
+    });
+    const historyKey = track.uri || `${reference.provider}:${reference.itemId}`;
+    const uris = this.selectTrackQueue(similar, `similar:${historyKey}`, shuffle);
+    if (!uris.length) throw new Error(`Music Assistant no encontró canciones parecidas a “${itemName(track)}” en los proveedores disponibles`);
+    return uris;
+  }
+
   async searchLibraryRadios(query, { limit = 25, provider } = {}) {
     return this.command("music/radios/library_items", {
       ...(String(query || "").trim() ? { search: query } : {}), limit, offset: 0, ...(provider ? { provider } : {})
@@ -266,11 +532,26 @@ export class MusicAssistantProvider {
   }
 
   async play({ query, playerId, sourceId, mode = "auto", searches = [], shuffle = false, mediaUri }) {
-    const mediaTypes = ["artist", "playlist", "album", "radio"].includes(mode) ? [mode] : MEDIA_TYPES;
+    const generation = this.beginQueueGeneration(playerId);
+    const mediaTypes = mode === "popular" ? ["artist"] : mode === "similar" ? ["track"]
+      : ["artist", "playlist", "album", "radio"].includes(mode) ? [mode] : MEDIA_TYPES;
     if (mode === "album") await this.command("player_queues/shuffle", { queue_id: playerId, shuffle_enabled: false });
     if (mediaUri) {
-      await this.command("player_queues/play_media", { queue_id: playerId, media: mediaUri, option: "replace" });
-      if (shuffle && mode !== "album") await this.command("player_queues/shuffle", { queue_id: playerId, shuffle_enabled: true });
+      if (mode === "artist") {
+        const { firstTrack } = await this.playArtistProgressively({ uri: mediaUri, name: query }, playerId, sourceId, generation);
+        return { status: "playing", item: this.normalizeItem(firstTrack), progressMs: 0,
+          device: { id: playerId, name: null, volumePercent: null }, queueId: playerId, statePending: true };
+      }
+      if (["artist", "popular", "similar"].includes(mode)) {
+        const selected = { uri: mediaUri, name: query };
+        const queue = mode === "artist" ? await this.buildArtistDiscographyQueue(selected, sourceId, shuffle)
+          : mode === "popular" ? await this.buildPopularArtistQueue(selected, shuffle)
+            : await this.buildSimilarTrackQueue(selected, sourceId, shuffle);
+        await this.command("player_queues/play_media", { queue_id: playerId, media: queue, option: "replace" });
+      } else {
+        await this.command("player_queues/play_media", { queue_id: playerId, media: mediaUri, option: "replace" });
+        if (shuffle && mode !== "album") await this.command("player_queues/shuffle", { queue_id: playerId, shuffle_enabled: true });
+      }
       return this.playbackAfterAcceptedCommand(playerId, { uri: mediaUri, name: query, media_type: mode });
     }
     if (mode === "custom" && searches.length) {
@@ -311,8 +592,20 @@ export class MusicAssistantProvider {
     if (choices.length > 1) return { clarificationRequired: true, query, choices };
     const normalized = mode === "radio" ? normalizeRadioName(radioQuery) : normalizeText(radioQuery);
     const item = matches.find((match) => (mode === "radio" ? normalizeRadioName(itemName(match)) : normalizeText(itemName(match))) === normalized) || matches[0];
-    await this.command("player_queues/play_media", { queue_id: playerId, media: item.uri || item, option: "replace" });
-    if (shuffle && mode !== "album") await this.command("player_queues/shuffle", { queue_id: playerId, shuffle_enabled: true });
+    if (mode === "artist") {
+      const { firstTrack } = await this.playArtistProgressively(item, playerId, sourceId, generation);
+      return { status: "playing", item: this.normalizeItem(firstTrack), progressMs: 0,
+        device: { id: playerId, name: null, volumePercent: null }, queueId: playerId, statePending: true };
+    }
+    if (["artist", "popular", "similar"].includes(mode)) {
+      const queue = mode === "artist" ? await this.buildArtistDiscographyQueue(item, sourceId, shuffle)
+        : mode === "popular" ? await this.buildPopularArtistQueue(item, shuffle)
+          : await this.buildSimilarTrackQueue(item, sourceId, shuffle);
+      await this.command("player_queues/play_media", { queue_id: playerId, media: queue, option: "replace" });
+    } else {
+      await this.command("player_queues/play_media", { queue_id: playerId, media: item.uri || item, option: "replace" });
+      if (shuffle && mode !== "album") await this.command("player_queues/shuffle", { queue_id: playerId, shuffle_enabled: true });
+    }
     return this.playbackAfterAcceptedCommand(playerId, item);
   }
 
@@ -355,7 +648,20 @@ export class MusicAssistantProvider {
   }
 
   pause(playerId) { return this.playerCommand(playerId, "pause"); }
-  resume(playerId) { return this.playerCommand(playerId, "play"); }
+  async resume(playerId) {
+    const queue = await this.resolveQueue(playerId);
+    if (queue.current_item) return this.playerCommand(playerId, "play");
+    let recent = await this.command("music/recently_played_items", {
+      limit: 10, media_types: ["track", "album", "playlist", "radio"], queue_id: playerId
+    });
+    if (!recent?.length) recent = await this.command("music/recently_played_items", {
+      limit: 10, media_types: ["track", "album", "playlist", "radio"]
+    });
+    const item = recent?.find((candidate) => candidate?.uri);
+    if (!item) throw new Error("Music Assistant no tiene una reproducción pausada ni elementos recientes para continuar");
+    await this.command("player_queues/play_media", { queue_id: playerId, media: item.uri, option: "replace" });
+    return this.playbackAfterAcceptedCommand(playerId, item);
+  }
   next(playerId) { return this.moveQueue(playerId, "next"); }
   previous(playerId) { return this.moveQueue(playerId, "previous"); }
   setVolume(playerId, volumePercent) { return this.playerCommand(playerId, "volume_set", { volume_level: Math.max(0, Math.min(100, Math.round(volumePercent))) }); }

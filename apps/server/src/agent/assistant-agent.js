@@ -12,11 +12,11 @@ REGLA OBLIGATORIA: usa weather_get_current para consultas sobre el clima actual 
 REGLA OBLIGATORIA: usa alarm_set cuando te pidan una alarma, una cuenta regresiva o que avises en el futuro. Para duraciones relativas usa delaySeconds. Para una hora concreta llama primero a datetime_get_current y luego entrega a alarm_set un instante ISO 8601 completo con el desfase horario correspondiente.
 REGLA OBLIGATORIA: usa alarm_list para consultar alarmas activas. Usa alarm_cancel para eliminarlas. Si el usuario identifica una alarma por hora, tipo o descripción, llama primero a alarm_list, selecciona únicamente una coincidencia inequívoca y pasa su ID exacto a alarm_cancel. Si hay varias coincidencias, pregunta cuál desea eliminar. Sólo usa all=true cuando el usuario pida explícitamente eliminar todas.
 REGLA OBLIGATORIA: usa alarm_get_remaining cuando pregunten cuánto falta para una alarma, aviso o cuenta regresiva. Omite query para obtener la próxima; usa una descripción breve como query para buscar una específica. Nunca calcules el tiempo restante con tools datetime.
-REGLA OBLIGATORIA: usa automation_schedule cuando pidan ejecutar en el futuro acciones de música o luces, incluso si también dicen “avísame”. Agrupa en una llamada las acciones de la misma hora y usa llamadas separadas para horarios distintos. Para acciones periódicas entrega recurrence: daily para todos los días, weekly con weekdays ISO para días específicos, o interval. Para una ejecución única a una hora concreta llama primero a datetime_get_current y entrega triggerAt ISO 8601 con zona. No ejecutes ahora las tools de cada acción.
+REGLA OBLIGATORIA: usa automation_schedule cuando pidan ejecutar en el futuro acciones de Music Assistant o dispositivos de Home Assistant, incluso si lo expresan como “recuérdame” o “avísame”. Traduce la instrucción a los mismos nombres y argumentos de acción que usarías inmediatamente, pero colócalos en actions; no ejecutes ahora las tools individuales. Usa announce=true sólo si además piden oír un aviso al ejecutarse. Agrupa en una llamada las acciones de la misma hora y usa llamadas separadas para horarios distintos. Para acciones periódicas entrega recurrence: daily para todos los días, weekly con weekdays ISO para días específicos, o interval. Para una ejecución única a una hora concreta llama primero a datetime_get_current y entrega triggerAt ISO 8601 con zona.
 REGLA OBLIGATORIA: Home Assistant es la fuente única de dispositivos, nombres, plantas y habitaciones. Usa home_list_devices para listar el catálogo y home_get_device_state para consultar cualquier dispositivo o sensor. Para luces usa light_*; para interruptores o ventiladores usa home_set_power; para persianas o cortinas cover_set_open; para termostatos climate_set_temperature; para cerraduras lock_set_locked; para aspiradoras vacuum_set_cleaning. Pasa en target sólo el nombre del dispositivo o habitación; si el usuario menciona una habitación además del dispositivo, pásala separadamente en room. Conserva números hablados como los dijo el usuario: el servidor resuelve “uno” y “1”. En light_set_brightness, brightnessPercent siempre es el nivel final solicitado: “a la mitad” significa 50, “al diez por ciento” significa 10 y nunca debes reutilizar un porcentaje anterior. Si ofreces reintentar una acción fallida y el usuario acepta, repite exactamente los argumentos de esa acción fallida. No afirmes que una acción se realizó si la tool no la confirmó.
-REGLA OBLIGATORIA: Music Assistant es la fuente única de orígenes, biblioteca, colas y destinos musicales. Usa music_play, music_pause, music_list_destinations y music_set_active_destination para reproducción y selección de equipos. Usa music_list_sources para consultar orígenes y music_set_active_source para cambiar por nombre el origen activo; el último elegido se conserva por satélite. Si una reproducción menciona un origen, pásalo como source. En music_play usa mode=radio para cualquier emisora o radio: se buscará sólo entre las radios guardadas en la biblioteca y su origen se seleccionará automáticamente; no pases source en ese caso. Usa mode=artist para “música de X”, mode=album para un álbum completo desde el inicio y mode=playlist para una lista existente. Si se menciona un equipo, pásalo como destination; quedará activo persistentemente. Nunca menciones Spotify Connect ni controles proveedores musicales directamente.
+REGLA OBLIGATORIA: Music Assistant es la fuente única de orígenes, biblioteca, colas y destinos musicales. Usa music_play, music_pause, music_list_destinations y music_set_active_destination para reproducción y selección de equipos. Usa music_list_sources para consultar orígenes y music_set_active_source para cambiar por nombre el origen activo; el último elegido se conserva por satélite. Si una reproducción menciona un origen, pásalo como source. En music_play usa mode=radio para cualquier emisora o radio: se buscará sólo entre las radios guardadas en la biblioteca y su origen se seleccionará automáticamente; no pases source en ese caso. Usa mode=artist para “música de X” o una selección general de un artista; Music Gateway recorrerá todos sus álbumes. Usa mode=popular para “las más populares”, “los éxitos” o “las más conocidas de X”. Usa mode=similar únicamente para “canciones parecidas/similares a X”, donde X debe ser una canción concreta. Usa mode=album para un álbum completo desde el inicio y mode=playlist para una lista existente. Si se menciona un equipo, pásalo como destination; quedará activo persistentemente. Nunca menciones Spotify Connect ni controles proveedores musicales directamente.
 Si music_play no incluye destination, Music Gateway usa automáticamente el destino activo; si no incluye source, usa automáticamente el origen activo. Nunca preguntes qué destino u origen usar ni consultes la reproducción antes de ejecutar music_play por ese motivo. Sólo pide esa configuración cuando Music Gateway confirme que no existe ninguna opción disponible.
-REGLA OBLIGATORIA: usa music_get_playback para “qué suena”, “dame detalles de la canción”, título, artista, álbum, progreso o dispositivo de la reproducción actual. Si se menciona un parlante, pásalo como destination aunque sea el destino activo de otro satélite. Usa music_resume, music_next, music_previous, music_set_volume, music_add_to_queue y music_transfer_playback para sus acciones respectivas. Nunca inventes metadatos ni afirmes que no tienes acceso antes de consultar music_get_playback.
+REGLA OBLIGATORIA: usa music_get_playback para “qué suena”, “dame detalles de la canción”, título, artista, álbum, progreso o dispositivo de la reproducción actual. Si se menciona un parlante, pásalo como destination aunque sea el destino activo de otro satélite. “Apaga”, “para” o “detén la música” significan music_pause; no apagan el parlante. “Enciende”, “prende”, “continúa” o “reanuda la música” significan music_resume; si no queda una cola pausada, Music Gateway recuperará una reproducción reciente. Usa music_next, music_previous, music_set_volume, music_add_to_queue y music_transfer_playback para sus acciones respectivas. Nunca inventes metadatos ni afirmes que no tienes acceso antes de consultar music_get_playback.
 Para music_set_volume, si el usuario no nombra un parlante o reproductor concreto, omite destination: Music Gateway ajustará el destino activo propio del satélite que hizo la solicitud. Expresiones genéricas como “el satélite”, “este equipo”, “aquí” o “la salida activa” siempre significan ese destino activo y no requieren aclaración. Sólo pasa destination cuando el usuario identifique explícitamente otro equipo.
 REGLA OBLIGATORIA: usa music_get_queue para mostrar, listar o consultar la cola y para preguntas como “qué canción viene después”, “cuál es la siguiente” o “qué temas siguen”. Si se menciona un parlante, pásalo como destination. Nunca afirmes que no tienes acceso a la cola sin ejecutar esta tool. Para TTS responde directamente con next cuando pregunten por la siguiente; al listar menciona la actual y como máximo las primeras diez próximas.
 REGLA OBLIGATORIA: usa music_clear_queue cuando pidan borrar, vaciar o limpiar la cola o lista de reproducción actual.
@@ -50,8 +50,8 @@ function requiredMusicTool(text, history = []) {
   if (/\b(usa|usar|cambia|cambiar|activa|activar|selecciona|seleccionar)\b/.test(normalized) && /\b(origen|fuente|servicio|proveedor|spotify|tidal|biblioteca)\b/.test(normalized)) return "music_set_active_source";
   if (/\b(escuchar|oir|reproduce|reproducir|toca|tocate|pon)\b/.test(normalized) && /\b(album|disco)\b/.test(normalized)) return "music_play";
   if (/\b(quiero|prefiero|vamos|puedes|deseo)?\s*(escuchar|oir|reproducir|sonar)\b/.test(normalized)
-    && (/\b(en|por|hacia)\b/.test(normalized)
-      || (/\b(esto|lo mismo|esta musica|la musica|esta reproduccion|la reproduccion|esta cancion|la cancion)\b/.test(normalized) && /\bdesde\b/.test(normalized)))) return "music_transfer_playback";
+    && /\b(esto|lo mismo|esta musica|la musica|esta reproduccion|la reproduccion|esta cancion|la cancion)\b/.test(normalized)
+    && /\b(en|por|hacia|desde)\b/.test(normalized)) return "music_transfer_playback";
   if (/\b(escuchar|oir|reproduce|reproducir|toca|tocate|pon)\b/.test(normalized) && /["“”][^"“”]+["“”]/.test(String(text || ""))) return "music_play";
   if (/\b(que|cual|detalles|titulo|artista|cuanto)\b/.test(normalized) && /\b(suena|sonando|cancion|tema|reproduccion|album)\b/.test(normalized)) return "music_get_playback";
   if (/\b(muestra|muestrame|lista|listar|consulta|ver|que hay)\b/.test(normalized) && /\b(cola|proximas canciones|a continuacion)\b/.test(normalized)) return "music_get_queue";
@@ -63,7 +63,8 @@ function requiredMusicTool(text, history = []) {
   if (/\b(pasa|transfiere|mueve|continua)\b/.test(normalized) && /\b(musica|reproduccion|esto)\b/.test(normalized) && /\b(a|al|hacia|en)\b/.test(normalized)) return "music_transfer_playback";
   if (/\b(cambia|cambiar)\b/.test(normalized) && /\b(destino|dispositivo|equipo|reproductor|parlante|altavoz|speaker)\b/.test(normalized)
     && /\b(manteniendo|mantener|conservando|conservar|misma cancion|misma musica|sin cambiar)\b/.test(normalized)) return "music_transfer_playback";
-  if (/\b(continua|reanuda|sigue)\b/.test(normalized)) return "music_resume";
+  if (/\b(continua|reanuda|sigue)\b/.test(normalized)
+    || (/\b(enciende|encender|prende|prender|activa|activar)\b/.test(normalized) && /\b(musica|audio|reproduccion|cancion|tema)\b/.test(normalized))) return "music_resume";
   if (/\b(volumen)\b/.test(normalized) && /\b(sube|baja|pon|coloca|ajusta|por ciento|%)\b/.test(normalized)) return "music_set_volume";
   if (/^\s*(?:sube|baja)\s*(?:lo|la)?\s*(?:un poco|algo|mas|mucho)?[.!?]*\s*$/.test(normalized)) return "music_set_volume";
   if (/\b(despues|cola|a continuacion)\b/.test(normalized) && /\b(pon|agrega|toca|anade)\b/.test(normalized)) return "music_add_to_queue";
@@ -93,9 +94,18 @@ function explicitWebCurrentMusicLookup(text) {
 
 function requiredAutomationTool(text) {
   const normalized = String(text || "").normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase();
-  const futureTime = /\b(a las\s+\d{1,2}(?::\d{2})?|dentro de|en\s+\d+\s+(?:segundos?|minutos?|horas?)|cada\s+\d*\s*(?:minutos?|horas?|dias?)|todos? los dias|de lunes a viernes|cada\s+(?:lunes|martes|miercoles|jueves|viernes|sabado|domingo))\b/.test(normalized);
-  const action = /\b(enciende|prende|apaga|luz|luces|ampolleta|reproduce|toca|musica|pausa|reanuda)\b/.test(normalized);
+  const futureTime = /\b(a las\s+\d{1,2}(?::\d{2})?|dentro de|en\s+(?:\d+\s+(?:segundos?|minutos?|horas?)|media hora|un cuarto de hora)|cada\s+\d*\s*(?:minutos?|horas?|dias?)|todos? los dias|de lunes a viernes|cada\s+(?:lunes|martes|miercoles|jueves|viernes|sabado|domingo))\b/.test(normalized);
+  const action = /\b(enciende|prende|apaga|apagate|enciendete|luz|luces|ampolleta|reproduce|toca|musica|pausa|reanuda)\b/.test(normalized);
   return futureTime && action ? "automation_schedule" : null;
+}
+
+function connectedPowerIntent(text) {
+  const normalized = String(text || "").normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, " ").replace(/\s+/g, " ").trim()
+    .replace(/^por favor\s+/, "");
+  if (/^(?:apagate|apaga este satelite)(?:\s|$)/.test(normalized)) return false;
+  if (/^(?:enciendete|enciende este satelite)(?:\s|$)/.test(normalized)) return true;
+  return null;
 }
 
 function inferredVolumeArgs(text) {
@@ -126,6 +136,8 @@ const sideEffectTools = new Set([
   "music_set_active_source", "alarm_set", "alarm_cancel", "automation_schedule"
   , "light_turn_on", "light_turn_off", "light_set_brightness", "light_set_color", "light_set_color_temperature"
 ]);
+
+const silentTrackChangeTools = new Set(["music_play", "music_next", "music_previous"]);
 
 function lightActionRequested(name, value) {
   if (name === "light_turn_on") return /\b(enciende|enciendela|encender|prende|prendela|prender|activa|activala|activar)\b/.test(value);
@@ -216,7 +228,7 @@ function currentMessageAuthorizes(name, text, history) {
   }
   if (name === "automation_schedule") {
     const futureTime = /\b(a las\s+\d{1,2}(?::\d{2})?|dentro de|en\s+\d+\s+(?:segundos?|minutos?|horas?)|cada\s+\d*\s*(?:minutos?|horas?|dias?)|todos? los dias|de lunes a viernes|cada\s+(?:lunes|martes|miercoles|jueves|viernes|sabado|domingo))\b/.test(normalized);
-    const requestedAction = /\b(enciende|prende|apaga|luz|luces|ampolleta|reproduce|toca|musica|pausa|reanuda)\b/.test(normalized);
+  const requestedAction = /\b(enciende|prende|apaga|abre|cierra|bloquea|desbloquea|limpia|regresa|ajusta|luz|luces|ampolleta|interruptor|ventilador|persiana|cortina|termostato|temperatura|cerradura|aspiradora|reproduce|toca|musica|pausa|reanuda)\b/.test(normalized);
     return futureTime && requestedAction;
   }
   if (name.startsWith("light_")) {
@@ -384,6 +396,7 @@ export class AssistantAgent {
             const result = await this.tools.execute("music_play", {
               query: choice.name, mediaUri: choice.uri, ...pending.request
             }, context);
+            context.suppressSpeech?.();
             return formatMusicPlayResult(result);
           } catch (error) {
             this.log("warn", "No se pudo reproducir la opción musical elegida", { error: error.message, satelliteId });
@@ -397,13 +410,21 @@ export class AssistantAgent {
       }
     }
     const hasHomeAutomation = this.tools.definitions().some((definition) => definition.function?.name === "home_list_devices");
-    const activeSystemPrompt = hasHomeAutomation ? systemPrompt : systemPrompt.replace(/\nREGLA OBLIGATORIA: usa home_list_devices[^\n]+/, "");
+    let activeSystemPrompt = hasHomeAutomation ? systemPrompt : systemPrompt.replace(/\nREGLA OBLIGATORIA: usa home_list_devices[^\n]+/, "");
+    activeSystemPrompt += context.connectedPowerDeviceId
+      ? `\nREGLA OBLIGATORIA: este satélite está conectado al enchufe de Home Assistant “${context.connectedPowerDeviceId}”. “Apágate”, “enciéndete”, “apaga este satélite” o “enciende este satélite” se refieren a ese enchufe: para una orden inmediata usa home_set_power con target exactamente “${context.connectedPowerDeviceId}” y el valor on correspondiente; si incluye una duración, hora o recurrencia usa automation_schedule con esa misma acción y nunca alarm_set.`
+      : "\nEste satélite no tiene un enchufe asociado. Si el usuario pide “apágate” o “enciéndete”, explica brevemente que debe configurarlo bajo Asistente > Conectado a Enchufe.";
     const messages = [
       { role: "system", content: activeSystemPrompt },
       ...history,
       { role: "user", content: text }
     ];
     const executedTools = new Set();
+    const requiredAutomation = requiredAutomationTool(text);
+    const connectedPowerOn = context.connectedPowerDeviceId ? connectedPowerIntent(text) : null;
+    const connectedPowerScheduled = connectedPowerOn !== null && requiredAutomation === "automation_schedule";
+    const automationAvailable = this.tools.definitions()
+      .some((definition) => definition.function?.name === "automation_schedule");
 
     for (let iteration = 0; iteration < this.maxIterations; iteration += 1) {
       const response = await this.client.chat(messages, this.tools.definitions());
@@ -413,6 +434,20 @@ export class AssistantAgent {
 
       const calls = message.tool_calls || [];
       if (!calls.length) {
+        if (connectedPowerOn !== null && !connectedPowerScheduled && !executedTools.has("home_set_power")) {
+          messages.push({
+            role: "system",
+            content: `No controlaste el enchufe asociado. Debes usar home_set_power con target exactamente “${context.connectedPowerDeviceId}” y on=${connectedPowerOn}.`
+          });
+          continue;
+        }
+        if (requiredAutomation && automationAvailable && !executedTools.has(requiredAutomation)) {
+          messages.push({
+            role: "system",
+            content: `No programaste la acción futura solicitada. Debes usar ${requiredAutomation}; alarm_set sólo emite avisos y no ejecuta acciones de dispositivos ni música.`
+          });
+          continue;
+        }
         if (!executedTools.size && /^\s*[¡¿]*(?:pausa|alto|detente|basta|silencio|callate|cállate|calla|corta|para)\s*[.!?]*$/i.test(String(text || ""))) {
           try {
             return formatPauseResult(await this.tools.execute("music_pause", {}, context));
@@ -420,10 +455,14 @@ export class AssistantAgent {
             return `No pude pausar la música: ${error.message}.`;
           }
         }
-        if (!executedTools.size && claimsCompletedAction(message.content)) {
+        const requiredMusic = requiredMusicTool(text, history);
+        if (claimsCompletedAction(message.content)
+          && ((!executedTools.size) || (requiredMusic && !executedTools.has(requiredMusic)))) {
           messages.push({
             role: "system",
-            content: "No ejecutaste ninguna herramienta. No puedes afirmar que realizaste una acción. Usa ahora la herramienta correspondiente o explica que no puedes hacerlo."
+            content: requiredMusic && !executedTools.has(requiredMusic)
+              ? `No ejecutaste ${requiredMusic}, que es la acción requerida. No puedes afirmar que completaste la solicitud. Usa ahora esa herramienta o explica que no puedes hacerlo.`
+              : "No ejecutaste ninguna herramienta. No puedes afirmar que realizaste una acción. Usa ahora la herramienta correspondiente o explica que no puedes hacerlo."
           });
           continue;
         }
@@ -435,6 +474,28 @@ export class AssistantAgent {
         const args = call.function?.arguments || {};
         this.log("info", "Ejecutando tool", { name, args });
         try {
+          if (connectedPowerOn !== null && !connectedPowerScheduled && (name !== "home_set_power"
+            || args.target !== context.connectedPowerDeviceId || args.on !== connectedPowerOn)) {
+            throw new Error(`Este comando requiere home_set_power con target “${context.connectedPowerDeviceId}” y on=${connectedPowerOn}`);
+          }
+          if (connectedPowerScheduled && name === "home_set_power") {
+            throw new Error("El apagado programado no debe ejecutarse inmediatamente; usa automation_schedule");
+          }
+          if (connectedPowerScheduled && name === "automation_schedule") {
+            const action = Array.isArray(args.actions)
+              ? args.actions.find((item) => item?.type === "home_set_power")
+              : null;
+            if (!action || action.target !== context.connectedPowerDeviceId || action.on !== connectedPowerOn) {
+              throw new Error(`La automatización debe usar home_set_power con target “${context.connectedPowerDeviceId}” y on=${connectedPowerOn}`);
+            }
+          }
+          if (requiredAutomation && name === "alarm_set") {
+            throw new Error(`El comando actual requiere ${requiredAutomation}; alarm_set sólo crea un aviso y no ejecuta la acción futura`);
+          }
+          const requiredMusic = requiredMusicTool(text, history);
+          if (requiredMusic && name?.startsWith("music_") && name !== requiredMusic) {
+            throw new Error(`El comando actual requiere ${requiredMusic}; no ejecutes ${name}`);
+          }
           if (name === "light_set_brightness") {
             const explicitlyRequested = explicitBrightnessPercent(text);
             if (explicitlyRequested !== null && Number(args.brightnessPercent) !== explicitlyRequested) {
@@ -448,6 +509,7 @@ export class AssistantAgent {
             this.pendingMusicChoices.set(satelliteId, pendingChoice);
             return musicChoiceQuestion(pendingChoice);
           }
+          if (silentTrackChangeTools.has(name)) context.suppressSpeech?.();
           messages.push({ role: "tool", tool_name: name, content: JSON.stringify(result) });
         } catch (error) {
           this.log("warn", "Tool finalizada con error", { name, error: error.message });

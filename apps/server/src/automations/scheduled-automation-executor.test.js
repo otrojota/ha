@@ -15,3 +15,21 @@ test("ejecuta todas las acciones programadas aunque una falle", async () => {
   assert.equal(result.success, false);
   assert.deepEqual(result.results.map((item) => item.success), [false, true]);
 });
+
+test("ejecuta acciones programadas mediante el mismo registro de tools", async () => {
+  const calls = [];
+  const executor = new ScheduledAutomationExecutor({
+    executeTool: async (name, args, context) => { calls.push({ name, args, context }); return { ok: true }; }
+  });
+
+  const result = await executor.execute({ id: "a2", satelliteId: "sat-1", actions: [
+    { type: "music_resume", destination: "Pantallita" },
+    { type: "cover_set_open", target: "Cortina", room: "Living", open: false }
+  ] });
+
+  assert.equal(result.success, true);
+  assert.deepEqual(calls, [
+    { name: "music_resume", args: { destination: "Pantallita" }, context: { satelliteId: "sat-1" } },
+    { name: "cover_set_open", args: { target: "Cortina", room: "Living", open: false }, context: { satelliteId: "sat-1" } }
+  ]);
+});

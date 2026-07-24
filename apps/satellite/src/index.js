@@ -10,6 +10,7 @@ import { VoskWakeWordDetector } from "./voice/vosk-wake-word-detector.js";
 import { OneShotCommandRetry, WakeActivationGate } from "./voice/wake-activation-gate.js";
 import { createTextToSpeechProvider } from "./tts/index.js";
 import {
+  normalizeConnectedPowerDeviceId,
   readAssistantConfig,
   validateAssistantNameWithVosk,
   writeAssistantConfig
@@ -254,7 +255,8 @@ async function handleAudioApi(request, response) {
         : update.name;
       const nextConfig = {
         name,
-        wakeWordEnabled: update.wakeWordEnabled !== false
+        wakeWordEnabled: update.wakeWordEnabled !== false,
+        connectedPowerDeviceId: normalizeConnectedPowerDeviceId(update.connectedPowerDeviceId)
       };
       await applyWakeWordConfiguration(nextConfig);
       assistantConfig = nextConfig;
@@ -497,7 +499,8 @@ voiceCapture = new VoiceCapture({
         headers: {
           "Content-Type": "audio/wav",
           "X-Satellite-Id": satellite.id,
-          "X-Assistant-Name": assistantConfig.name
+          "X-Assistant-Name": assistantConfig.name,
+          "X-Connected-Power-Device-Id": assistantConfig.connectedPowerDeviceId || ""
         },
         body: audio
       });
