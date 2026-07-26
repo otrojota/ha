@@ -3,6 +3,7 @@ import test from "node:test";
 import { createPlayMusicTool } from "./play-music.tool.js";
 import { createSetActiveMusicDestinationTool } from "./set-active-destination.tool.js";
 import { createListLibraryRadiosTool } from "./list-library-radios.tool.js";
+import { createListLibraryPlaylistsTool } from "./list-library-playlists.tool.js";
 import { createListMusicSourcesTool } from "./list-sources.tool.js";
 import { createSetActiveMusicSourceTool } from "./set-active-source.tool.js";
 import { createGetMusicPlaybackTool } from "./get-playback.tool.js";
@@ -84,6 +85,22 @@ test("music_list_library_radios devuelve emisoras y no orígenes", async () => {
 
   assert.deepEqual(result.radios.map((radio) => radio.name), ["Radio Bío-Bío", "Cooperativa"]);
   assert.equal(result.total, 2);
+});
+
+test("music_list_library_playlists devuelve las listas disponibles sin reproducirlas", async () => {
+  const tool = createListLibraryPlaylistsTool({ music: { async getLibraryPlaylists(satelliteId) {
+    assert.equal(satelliteId, "rpi");
+    return { total: 2, playlists: [
+      { name: "Favoritas", provider: "spotify--jota", uri: "library://playlist/1" },
+      { name: "Viaje", provider: "spotify--jota", uri: "library://playlist/2" }
+    ] };
+  } } });
+
+  const result = await tool.execute({}, { satelliteId: "rpi" });
+
+  assert.deepEqual(result.playlists.map((playlist) => playlist.name), ["Favoritas", "Viaje"]);
+  assert.equal(result.total, 2);
+  assert.equal(result.truncated, false);
 });
 
 test("las tools de origen propagan el satélite actual", async () => {

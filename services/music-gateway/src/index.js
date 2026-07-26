@@ -177,8 +177,9 @@ createServer(async (request, response) => {
     const url = new URL(request.url, `http://${request.headers.host || "localhost"}`);
     if (request.method === "GET" && url.pathname === "/v1/artwork") {
       const path = url.searchParams.get("path");
-      if (!path) throw new Error("Falta la ruta de la portada");
-      const artwork = await provider.getArtwork(path, url.searchParams.get("provider"));
+      const proxyId = url.searchParams.get("proxyId");
+      if (!path && !proxyId) throw new Error("Falta la ruta o el identificador de la portada");
+      const artwork = await provider.getArtwork(path, url.searchParams.get("provider"), proxyId);
       response.statusCode = artwork.status;
       response.setHeader("Content-Type", artwork.headers.get("content-type") || "application/octet-stream");
       response.setHeader("Cache-Control", artwork.headers.get("cache-control") || "public, max-age=3600");
@@ -221,6 +222,11 @@ createServer(async (request, response) => {
       requireScope(request);
       const radios = await provider.getLibraryRadios();
       result = { radios, total: radios.length };
+    }
+    else if (request.method === "GET" && url.pathname === "/v1/music/playlists") {
+      requireScope(request);
+      const playlists = await provider.getLibraryPlaylists();
+      result = { playlists, total: playlists.length };
     }
     else if (request.method === "POST" && url.pathname === "/v1/music/play") {
       const scope = requireScope(request);

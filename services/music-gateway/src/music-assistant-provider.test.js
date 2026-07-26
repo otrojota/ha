@@ -527,6 +527,22 @@ test("lista únicamente las emisoras guardadas en la biblioteca", async () => {
   assert.deepEqual(radios.map((radio) => radio.name), ["Radio Bío-Bío"]);
 });
 
+test("lista las playlists disponibles en la biblioteca", async () => {
+  let request;
+  const provider = new MusicAssistantProvider({ fetchImpl: async (_url, options) => {
+    request = JSON.parse(options.body);
+    return response([
+      { uri: "library://playlist/1", name: "Favoritas", media_type: "playlist", provider: "spotify--jota" }
+    ]);
+  } });
+
+  const playlists = await provider.getLibraryPlaylists();
+
+  assert.equal(request.command, "music/playlists/library_items");
+  assert.deepEqual(request.args, { limit: 500, offset: 0 });
+  assert.deepEqual(playlists.map((playlist) => playlist.name), ["Favoritas"]);
+});
+
 test("solicita aclaración cuando una letra hablada coincide con nombres de artista distintos", async () => {
   const commands = [];
   const provider = new MusicAssistantProvider({ fetchImpl: async (_url, options) => {
@@ -681,6 +697,19 @@ test("normaliza portadas de MA como rutas del proxy de Music Gateway", () => {
   assert.equal(item.artworkUrl, "/v1/artwork?path=https%3A%2F%2Fi.scdn.co%2Fcover.jpg&provider=spotify--123");
 });
 
+test("prioriza el identificador opaco de portadas de MA 2.9", () => {
+  const provider = new MusicAssistantProvider({});
+  const proxyId = "a".repeat(64);
+  const item = provider.normalizeItem({
+    name: "Tema",
+    image_url: "https://i.scdn.co/legacy-cover.jpg",
+    metadata: {
+      images: [{ path: "https://i.scdn.co/cover.jpg", provider: "spotify--123", proxy_id: proxyId }]
+    }
+  });
+  assert.equal(item.artworkUrl, `/v1/artwork?proxyId=${proxyId}`);
+});
+
 test("conserva el origen externo de un favorito guardado en la biblioteca de MA", () => {
   const provider = new MusicAssistantProvider({});
   const item = provider.normalizeItem({
@@ -706,4 +735,21 @@ test("solicita la portada a MA usando autenticación", async () => {
   assert.match(received.url, /\/imageproxy\?/);
   assert.match(received.url, /provider=spotify--123/);
   assert.equal(received.authorization, "Bearer valid-token");
+});
+
+test("solicita por la ruta canónica las portadas con proxy_id de MA 2.9", async () => {
+  let received;
+  const proxyId = "b".repeat(64);
+  const provider = new MusicAssistantProvider({ token: "valid-token", fetchImpl: async (url, options) => {
+    received = { url: url.toString(), authorization: options.headers.Authorization };
+    return { ok: true, status: 200, headers: new Headers({ "content-type": "image/jpeg" }) };
+  } });
+  await provider.getArtwork(null, null, proxyId);
+  assert.match(received.url, new RegExp(`/imageproxy/${proxyId}$`));
+  assert.equal(received.authorization, "Bearer valid-token");
+});
+
+test("rechaza identificadores de portada que no tengan el formato opaco de MA", async () => {
+  const provider = new MusicAssistantProvider({});
+  await assert.rejects(provider.getArtwork(null, null, "../config"), /identificador de la portada no es válido/);
 });

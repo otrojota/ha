@@ -9,7 +9,7 @@ services:
       - ./searxng-settings.yml:/etc/searxng/settings.yml:ro
 
   music-assistant:
-    image: ${MUSIC_ASSISTANT_IMAGE:-ghcr.io/music-assistant/server:2.8.8}
+    image: ${MUSIC_ASSISTANT_IMAGE:-ghcr.io/music-assistant/server:2.9.9}
     container_name: ha-music-assistant
     restart: unless-stopped
     network_mode: host

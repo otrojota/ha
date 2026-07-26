@@ -59,7 +59,7 @@ apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y \
   build-essential ca-certificates curl ffmpeg git libasound2-dev libffi-dev \
   pipewire pipewire-pulse portaudio19-dev pulseaudio-utils python3 python3-pip \
-  python3-venv rpd-wayland-core chromium unzip wlr-randr
+  python3-venv rpd-wayland-core chromium cog unzip wlr-randr
 
 INSTALL_NODE=false
 if ! command -v node >/dev/null 2>&1; then

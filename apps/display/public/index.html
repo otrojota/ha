@@ -99,10 +99,9 @@
         <form id="assistant-form" class="assistant-form">
           <label for="assistant-name" class="form-label fs-5">Nombre o frase de activación</label>
           <input id="assistant-name" class="assistant-name-input" name="name" type="text" minlength="2" maxlength="40" autocomplete="off" required>
-          <label for="connected-power-device" class="form-label fs-5">Conectado a Enchufe</label>
-          <select id="connected-power-device" class="assistant-name-input" name="connectedPowerDeviceId">
-            <option value="">Ninguno</option>
-          </select>
+          <label class="form-label fs-5">Conectado a enchufe</label>
+          <input id="connected-power-device" name="connectedPowerDeviceId" type="hidden">
+          <button id="connected-power-device-open" class="selection-trigger" type="button"><span><strong id="connected-power-device-label">Ninguno</strong><small>Seleccionar enchufe asociado</small></span><span class="chevron">›</span></button>
           <label class="switch-row"><span><strong>Activación por nombre</strong><small>Escucha continuamente la palabra de activación. Desactívala para ahorrar CPU y memoria; el botón de micrófono seguirá disponible.</small></span><input id="wake-word-enabled" type="checkbox" role="switch" checked></label>
           <button class="save-button" type="submit">Validar y guardar</button>
         </form>
@@ -163,14 +162,9 @@
         <header class="screen-header"><button class="back-button" data-screen="server-settings-screen">‹</button><div><div class="eyebrow">Servidor</div><h1>Modelo de lenguaje</h1></div></header>
         <p class="text-secondary fs-5">La nueva configuración se prueba antes de activarse. Las credenciales se envían al servidor, pero nunca vuelven a mostrarse.</p>
         <form id="llm-form" class="destination-form">
-          <label>Proveedor
-            <select id="llm-provider" class="assistant-name-input" required>
-              <option value="ollama">Ollama</option>
-              <option value="openai">OpenAI API</option>
-              <option value="github-models">GitHub Models</option>
-              <option value="openai-compatible">API compatible con OpenAI</option>
-            </select>
-          </label>
+          <label>Proveedor</label>
+          <input id="llm-provider" type="hidden" value="ollama">
+          <button id="llm-provider-open" class="selection-trigger" type="button"><span><strong id="llm-provider-label">Ollama</strong><small>Seleccionar proveedor del modelo</small></span><span class="chevron">›</span></button>
           <label id="llm-base-url-field">URL base<input id="llm-base-url" class="assistant-name-input" type="url" required></label>
           <label>Modelo<input id="llm-model" class="assistant-name-input" autocomplete="off" required></label>
           <label id="llm-api-key-field">Nueva API key o token<input id="llm-api-key" class="assistant-name-input" type="password" autocomplete="new-password"><small id="llm-credential-status">Sin credencial configurada</small></label>
@@ -184,6 +178,12 @@
           <button id="llm-delete-credential" class="save-button danger" type="button">Eliminar credencial guardada</button>
         </form>
         <div id="llm-status" class="status-message mt-3" role="status"></div>
+      </section>
+
+      <section id="selection-screen" class="screen">
+        <header class="screen-header"><button id="selection-back" class="back-button" type="button">‹</button><div><div class="eyebrow">Selección</div><h1 id="selection-title">Seleccionar opción</h1></div></header>
+        <p id="selection-help" class="text-secondary fs-5"></p>
+        <div id="selection-list" class="device-list"></div>
       </section>
 
       <section id="music-assistant-screen" class="screen">

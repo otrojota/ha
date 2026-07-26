@@ -21,6 +21,7 @@ Para music_set_volume, si el usuario no nombra un parlante o reproductor concret
 REGLA OBLIGATORIA: usa music_get_queue para mostrar, listar o consultar la cola y para preguntas como “qué canción viene después”, “cuál es la siguiente” o “qué temas siguen”. Si se menciona un parlante, pásalo como destination. Nunca afirmes que no tienes acceso a la cola sin ejecutar esta tool. Para TTS responde directamente con next cuando pregunten por la siguiente; al listar menciona la actual y como máximo las primeras diez próximas.
 REGLA OBLIGATORIA: usa music_clear_queue cuando pidan borrar, vaciar o limpiar la cola o lista de reproducción actual.
 REGLA OBLIGATORIA: usa music_list_library_radios cuando pregunten qué radios o emisoras están disponibles, agregadas o guardadas. Esta herramienta lista únicamente las radios de la biblioteca de Music Assistant; no uses music_list_sources para esa consulta.
+REGLA OBLIGATORIA: usa music_list_library_playlists cuando pregunten qué playlists o listas de reproducción están disponibles, agregadas o guardadas en Music Assistant. Esta herramienta sólo consulta la biblioteca: no reproduce ni modifica las listas.
 REGLA OBLIGATORIA: usa music_get_current_credits cuando pregunten quién canta, toca un instrumento, interpreta, compuso, escribió, produjo o participó en la canción actual. “Artista acreditado” no significa necesariamente “vocalista”: responde sólo con los roles confirmados por la tool, menciona la limitación si faltan créditos y nunca deduzcas músicos desde el nombre del proyecto.
 “Cambia la canción a X”, “pon ahora X” o “mejor toca X” reemplazan inmediatamente la reproducción mediante music_play; no agregan X a la cola. Usa music_add_to_queue únicamente cuando el usuario diga “después”, “a continuación” o pida explícitamente agregar a la cola. Si el usuario pide otra canción del mismo artista, incluye el artista conocido por el contexto en query para desambiguar.
 Durante una conversación musical, interpreta un nombre breve de canción, álbum o artista como una solicitud de reproducción aunque la transcripción haya omitido “toca” o “reproduce”. No uses web_search_and_read para buscar contenido reproducible: todo contenido musical debe resolverse mediante Music Assistant. Usa la web sólo si el usuario pide explícitamente información, historia, noticias o datos sobre música.
@@ -42,8 +43,11 @@ function requiredMusicTool(text, history = []) {
   if (explicitWebCurrentMusicLookup(text)) return "music_get_playback";
   if (/\b(radio|radios|emisora|emisoras|estacion|estaciones)\b/.test(normalized)
     && /\b(disponible|disponibles|agregada|agregadas|guardada|guardadas|tienes|hay|lista|listar|muestra|muestrame|cuales)\b/.test(normalized)) return "music_list_library_radios";
-  if (/^(pausa|pausar|deten|detener|detente|alto|para|parate|basta|silencio|callate|calla|corta|cortalo|apaga)[.!?]*$/.test(normalized.trim())) return "music_pause";
-  if (/\b(pausa|pausar|deten|detener|detente|alto|para|parate|basta|silencio|callate|calla|corta|cortalo|apaga)\b/.test(normalized) && /\b(musica|audio|cancion|reproduccion|tema|sonido)\b/.test(normalized)) return "music_pause";
+  if (/\b(playlist|playlists|lista|listas)\b/.test(normalized)
+    && (/\b(?:playlist|playlists)\b/.test(normalized) || /\blistas? de reproduccion\b/.test(normalized))
+    && /\b(disponible|disponibles|agregada|agregadas|guardada|guardadas|tienes|hay|lista|listar|muestra|muestrame|cual|cuales|dime)\b/.test(normalized)) return "music_list_library_playlists";
+  if (/^(pausa|pauza|pausar|deten|detener|detente|alto|para|parate|basta|silencio|callate|calla|corta|cortalo|apaga)[.!?]*$/.test(normalized.trim())) return "music_pause";
+  if (/\b(pausa|pauza|pausar|deten|detener|detente|alto|para|parate|basta|silencio|callate|calla|corta|cortalo|apaga)\b/.test(normalized) && /\b(musica|audio|cancion|reproduccion|tema|sonido)\b/.test(normalized)) return "music_pause";
   if (/\b(credito|creditos)\b/.test(normalized) || (/\b(quien|quienes|musicos)\b/.test(normalized) && /\b(canta|vocalista|voz|toca|interpreta|participo|compuso|compositor|escribio|letrista|produjo|productor|musicos|guitarra|bajo|bateria|teclado|piano)\b/.test(normalized))) return "music_get_current_credits";
   if (/\b(muestra|muestrame|lista|listar|cuales|dime)\b/.test(normalized) && /\b(dispositivos|destinos|equipos|reproductores)\b/.test(normalized) && /\b(musica|musicales|spotify|audio|reproduccion)\b/.test(normalized)) return "music_list_destinations";
   if (/\b(muestra|muestrame|lista|listar|cuales|dime|que)\b/.test(normalized) && /\b(origenes|fuentes|servicios|proveedores|bibliotecas)\b/.test(normalized) && /\b(musica|musicales|disponibles|configurados)\b/.test(normalized)) return "music_list_sources";
@@ -82,6 +86,22 @@ function requiredMusicTool(text, history = []) {
   const conversationalReply = /^(si|no|estas ahi|gracias|ok|okay|hola|bueno|vale|perfecto|de acuerdo|correcto|confirmo|confirmado|hazlo|hazlo por favor|adelante|procede|por favor|que paso)[.!?]*$/.test(normalized);
   if (recentMusicContext && words.length > 0 && words.length <= 10 && !asksForInformation && !conversationalReply) return "music_play";
   return null;
+}
+
+function explicitlyRequestsMusicPlay(text) {
+  const normalized = String(text || "").normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase();
+  return /\b(reproduce|reproducir|toca|tocar|tocate|pon|coloca|escucha|escuchar|quiero oir|quiero escuchar)\b/.test(normalized)
+    || (/\b(cambia|cambiar|reemplaza|mejor)\b/.test(normalized)
+      && /\b(cancion|tema|pista|musica|album|disco|artista)\b/.test(normalized));
+}
+
+function shouldRejectMusicToolMismatch(requiredMusic, selectedTool, text) {
+  if (!requiredMusic || !selectedTool?.startsWith("music_") || selectedTool === requiredMusic) return false;
+  const stateDrivenControls = new Set(["music_pause", "music_resume", "music_next", "music_previous"]);
+  if (requiredMusic === "music_play" && stateDrivenControls.has(selectedTool) && !explicitlyRequestsMusicPlay(text)) {
+    return false;
+  }
+  return true;
 }
 
 function explicitWebCurrentMusicLookup(text) {
@@ -448,7 +468,7 @@ export class AssistantAgent {
           });
           continue;
         }
-        if (!executedTools.size && /^\s*[¡¿]*(?:pausa|alto|detente|basta|silencio|callate|cállate|calla|corta|para)\s*[.!?]*$/i.test(String(text || ""))) {
+        if (!executedTools.size && /^\s*[¡¿]*(?:pausa|pauza|alto|detente|basta|silencio|callate|cállate|calla|corta|para)\s*[.!?]*$/i.test(String(text || ""))) {
           try {
             return formatPauseResult(await this.tools.execute("music_pause", {}, context));
           } catch (error) {
@@ -492,8 +512,11 @@ export class AssistantAgent {
           if (requiredAutomation && name === "alarm_set") {
             throw new Error(`El comando actual requiere ${requiredAutomation}; alarm_set sólo crea un aviso y no ejecuta la acción futura`);
           }
-          const requiredMusic = requiredMusicTool(text, history);
-          if (requiredMusic && name?.startsWith("music_") && name !== requiredMusic) {
+          const inferredMusic = requiredMusicTool(text, history);
+          const requiredMusic = inferredMusic === "music_transfer_playback"
+            ? inferredMusic
+            : explicitlyRequestsMusicPlay(text) ? "music_play" : inferredMusic;
+          if (shouldRejectMusicToolMismatch(requiredMusic, name, text)) {
             throw new Error(`El comando actual requiere ${requiredMusic}; no ejecutes ${name}`);
           }
           if (name === "light_set_brightness") {

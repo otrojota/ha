@@ -12,7 +12,7 @@ RELEASE_DIR="/opt/ha/releases/satellite-$VERSION"
 SATELLITE_USER=${HA_SATELLITE_USER:-}
 
 if [ -z "$SATELLITE_USER" ] || ! id "$SATELLITE_USER" >/dev/null 2>&1; then
-  echo "Define HA_SATELLITE_USER con el usuario normal que ejecutará audio y Chromium." >&2
+  echo "Define HA_SATELLITE_USER con el usuario normal que ejecutará audio y el kiosco." >&2
   exit 1
 fi
 if [ "$(id -u "$SATELLITE_USER")" -eq 0 ]; then
@@ -20,7 +20,7 @@ if [ "$(id -u "$SATELLITE_USER")" -eq 0 ]; then
   exit 1
 fi
 
-for COMMAND in node npm ffmpeg pactl pw-play chromium pgrep pkill runuser; do
+for COMMAND in node npm ffmpeg pactl pw-play cog pgrep pkill runuser; do
   if ! command -v "$COMMAND" >/dev/null 2>&1; then
     echo "Falta el comando requerido: $COMMAND" >&2
     exit 1
@@ -81,7 +81,7 @@ touch "$AUTOSTART"
 if grep -q '/opt/ha/current/deploy/kiosk-start.sh' "$AUTOSTART"; then
   echo "El autostart administrado del kiosco ya existe."
 elif grep -q 'localhost:8080' "$AUTOSTART"; then
-  echo "Se conservó el comando Chromium existente para localhost:8080."
+  echo "Se conservó el comando de kiosco existente para localhost:8080."
 else
   printf '\n# HA Satellite kiosk\n/opt/ha/current/deploy/kiosk-start.sh &\n' >>"$AUTOSTART"
 fi
@@ -92,19 +92,23 @@ systemctl daemon-reload
 systemctl enable ha-display.service ha-satellite.service
 systemctl restart ha-display.service ha-satellite.service
 
-# Chromium no pertenece a ha-display.service: Labwc lo inicia desde su
-# autostart. En una actualización terminamos únicamente el árbol Chromium del
+# Cog no pertenece a ha-display.service: Labwc lo inicia desde su autostart. En
+# una actualización terminamos únicamente el navegador del usuario del satélite
 # usuario del satélite y relanzamos el mismo script de kiosco contra el release
 # que acaba de quedar activo. Esto evita reiniciar toda la Raspberry.
 RUNTIME_DIR="/run/user/$SATELLITE_UID"
 WAYLAND_SOCKET=$(find "$RUNTIME_DIR" -maxdepth 1 -type s -name 'wayland-*' -print 2>/dev/null | head -n 1 || true)
 if [ -n "$WAYLAND_SOCKET" ]; then
+  pkill -TERM -u "$SATELLITE_UID" -x cog 2>/dev/null || true
   pkill -TERM -u "$SATELLITE_UID" -x chromium 2>/dev/null || true
   WAIT_COUNT=0
-  while pgrep -u "$SATELLITE_UID" -x chromium >/dev/null 2>&1 && [ "$WAIT_COUNT" -lt 20 ]; do
+  while { pgrep -u "$SATELLITE_UID" -x cog >/dev/null 2>&1 || pgrep -u "$SATELLITE_UID" -x chromium >/dev/null 2>&1; } && [ "$WAIT_COUNT" -lt 20 ]; do
     sleep 0.25
     WAIT_COUNT=$((WAIT_COUNT + 1))
   done
+  if pgrep -u "$SATELLITE_UID" -x cog >/dev/null 2>&1; then
+    pkill -KILL -u "$SATELLITE_UID" -x cog 2>/dev/null || true
+  fi
   if pgrep -u "$SATELLITE_UID" -x chromium >/dev/null 2>&1; then
     pkill -KILL -u "$SATELLITE_UID" -x chromium 2>/dev/null || true
   fi
@@ -113,18 +117,18 @@ if [ -n "$WAYLAND_SOCKET" ]; then
   chown "$SATELLITE_USER:$SATELLITE_GROUP" "$KIOSK_LOG"
   WAYLAND_DISPLAY=$(basename "$WAYLAND_SOCKET")
   # Cierra el descriptor 9 usado por flock en el wrapper de despliegue. Sin
-  # esto Chromium lo hereda y mantiene el bloqueo incluso tras terminar la
+  # esto el navegador lo hereda y mantiene el bloqueo incluso tras terminar la
   # instalación.
   runuser -u "$SATELLITE_USER" -- sh -c "HOME='$SATELLITE_HOME' XDG_RUNTIME_DIR='$RUNTIME_DIR' WAYLAND_DISPLAY='$WAYLAND_DISPLAY' DBUS_SESSION_BUS_ADDRESS='unix:path=$RUNTIME_DIR/bus' nohup /opt/ha/current/deploy/kiosk-start.sh >>'$KIOSK_LOG' 2>&1 </dev/null &" 9>&-
   sleep 2
-  if pgrep -u "$SATELLITE_UID" -x chromium >/dev/null 2>&1; then
-    echo "Chromium Kiosk reiniciado sin reiniciar el equipo."
+  if pgrep -u "$SATELLITE_UID" -x cog >/dev/null 2>&1; then
+    echo "Cog/WPE Kiosk reiniciado sin reiniciar el equipo."
   else
-    echo "No se pudo relanzar Chromium Kiosk; revisa $KIOSK_LOG" >&2
+    echo "No se pudo relanzar Cog/WPE Kiosk; revisa $KIOSK_LOG" >&2
     exit 1
   fi
 else
-  echo "No hay una sesión Wayland activa; Chromium se iniciará en el próximo acceso o reinicio."
+  echo "No hay una sesión Wayland activa; Cog/WPE se iniciará en el próximo acceso o reinicio."
 fi
 
 # La instalación ya fue activada y los servicios (y, cuando corresponde, el

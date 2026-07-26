@@ -8,7 +8,7 @@ function targetSchema(extra = {}) {
 
 export function createHomeAssistantDeviceTools({ home, clientProvider, refresh }) {
   const control = async (target, room, domains, serviceFor) => {
-    const devices = home.resolve(target, room).filter((device) => domains.includes(device.domain));
+    const devices = home.resolve(target, room, { domains });
     if (!devices.length) throw new Error(`“${target}” no contiene dispositivos compatibles con esta acción`);
     const client = clientProvider();
     if (!client) throw new Error("Home Assistant no está conectado");

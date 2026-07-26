@@ -22,6 +22,7 @@ function imageUrl(item) {
   const image = item?.metadata?.images?.[0] || item?.image;
   if (!image) return null;
   if (typeof image === "string") return `/v1/artwork?path=${encodeURIComponent(image)}`;
+  if (image.proxy_id) return `/v1/artwork?proxyId=${encodeURIComponent(image.proxy_id)}`;
   if (image.path) return `/v1/artwork?path=${encodeURIComponent(image.path)}${image.provider ? `&provider=${encodeURIComponent(image.provider)}` : ""}`;
   return null;
 }
@@ -240,10 +241,18 @@ export class MusicAssistantProvider {
     return { status: "ok", provider: "music-assistant", url: this.baseUrl, players: players.length };
   }
 
-  async getArtwork(path, provider) {
-    const url = new URL(`${this.baseUrl}/imageproxy`);
-    url.searchParams.set("path", path);
-    if (provider) url.searchParams.set("provider", provider);
+  async getArtwork(path, provider, proxyId) {
+    const normalizedProxyId = String(proxyId || "").trim().toLowerCase();
+    if (normalizedProxyId && !/^[a-f0-9]{64}$/.test(normalizedProxyId)) {
+      throw new Error("El identificador de la portada no es válido");
+    }
+    const url = normalizedProxyId
+      ? new URL(`/imageproxy/${normalizedProxyId}`, this.baseUrl)
+      : new URL(`${this.baseUrl}/imageproxy`);
+    if (!normalizedProxyId) {
+      url.searchParams.set("path", path);
+      if (provider) url.searchParams.set("provider", provider);
+    }
     const response = await this.fetch(url, {
       headers: this.token ? { Authorization: `Bearer ${this.token}` } : {},
       signal: AbortSignal.timeout(this.timeoutMs)
@@ -531,6 +540,11 @@ export class MusicAssistantProvider {
     return (await this.searchLibraryRadios("", { limit })).map((radio) => this.normalizeItem(radio));
   }
 
+  async getLibraryPlaylists({ limit = 500 } = {}) {
+    const playlists = await this.command("music/playlists/library_items", { limit, offset: 0 });
+    return (playlists || []).map((playlist) => this.normalizeItem(playlist));
+  }
+
   async play({ query, playerId, sourceId, mode = "auto", searches = [], shuffle = false, mediaUri }) {
     const generation = this.beginQueueGeneration(playerId);
     const mediaTypes = mode === "popular" ? ["artist"] : mode === "similar" ? ["track"]
@@ -727,7 +741,7 @@ export class MusicAssistantProvider {
   normalizeItem(raw) {
     if (!raw) return null;
     const artists = raw.artists?.map((artist) => artist.name) || (raw.artist ? [raw.artist] : []);
-    const artworkUrl = proxiedImageUrl(raw.image_url) || imageUrl(raw);
+    const artworkUrl = imageUrl(raw) || proxiedImageUrl(raw.image_url);
     const mappings = raw.provider_mappings || [];
     const externalMapping = mappings.find((mapping) => mapping.provider_domain !== "library" && mapping.provider_instance !== "library");
     const storedInLibrary = raw.provider === "library" || String(raw.uri || "").startsWith("library://");

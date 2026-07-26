@@ -14,6 +14,13 @@ check_service() {
 check_service ha-display.service
 check_service ha-satellite.service
 
+if pgrep -x cog >/dev/null 2>&1; then
+  echo "OK  Cog/WPE Kiosk activo"
+else
+  echo "ERROR  Cog/WPE Kiosk no está activo" >&2
+  FAILED=1
+fi
+
 if curl -fsS http://127.0.0.1:8080/ >/dev/null 2>&1; then
   echo "OK  Display local"
 else

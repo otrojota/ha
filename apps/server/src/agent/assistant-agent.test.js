@@ -217,6 +217,33 @@ test("interpreta encender y apagar la música como reanudar y pausar", async () 
   }
 });
 
+test("exige consultar la biblioteca cuando preguntan por playlists disponibles", async () => {
+  let turn = 0;
+  const calls = [];
+  const client = { async chat(messages) {
+    turn += 1;
+    if (turn === 1) return { message: toolCall("music_list_sources", {}) };
+    if (turn === 2) {
+      assert.match(messages.at(-1).content, /requiere music_list_library_playlists/);
+      return { message: toolCall("music_list_library_playlists", {}) };
+    }
+    return { message: { role: "assistant", content: "Tienes Favoritas y Viaje." } };
+  } };
+  const tools = {
+    definitions: () => [],
+    async execute(name) {
+      calls.push(name);
+      return { total: 2, playlists: [{ name: "Favoritas" }, { name: "Viaje" }] };
+    }
+  };
+
+  const answer = await new AssistantAgent({ client, tools, log: () => {} })
+    .respond("¿Qué listas de reproducción tengo disponibles?", { satelliteId: "rpi" });
+
+  assert.deepEqual(calls, ["music_list_library_playlists"]);
+  assert.equal(answer, "Tienes Favoritas y Viaje.");
+});
+
 test("una acción futura de Home Assistant no puede degradarse a un recordatorio", async () => {
   let turn = 0;
   const calls = [];
@@ -356,6 +383,88 @@ test("mantiene un fallback local sólo para pausa de emergencia", async () => {
 
   assert.deepEqual(executed, [{ name: "music_pause", args: {} }]);
   assert.equal(answer, "Música pausada en Living.");
+});
+
+test("tolera que STT transcriba pausa como pauza aun con contexto musical", async () => {
+  let turn = 0;
+  const executed = [];
+  const client = { async chat() {
+    turn += 1;
+    return { message: turn === 1
+      ? toolCall("music_pause", {})
+      : { role: "assistant", content: "Música pausada." } };
+  } };
+  const tools = {
+    definitions: () => [],
+    async execute(name, args) {
+      executed.push({ name, args });
+      return { status: "paused", destination: "simón" };
+    }
+  };
+
+  const answer = await new AssistantAgent({ client, tools, log: () => {} }).respond("Pauza.", {
+    satelliteId: "memo",
+    history: [
+      { role: "user", content: "Pon música" },
+      { role: "assistant", content: "Reproduciendo música." }
+    ]
+  });
+
+  assert.deepEqual(executed, [{ name: "music_pause", args: {} }]);
+  assert.equal(answer, "Música pausada.");
+});
+
+test("deja que MA resuelva un control sobre reproducción manual aunque la frase sea imprecisa", async () => {
+  let turn = 0;
+  const executed = [];
+  const client = { async chat() {
+    turn += 1;
+    return { message: turn === 1
+      ? toolCall("music_pause", {})
+      : { role: "assistant", content: "Música pausada." } };
+  } };
+  const tools = {
+    definitions: () => [],
+    async execute(name, args) {
+      executed.push({ name, args });
+      return { status: "paused", destination: "simón" };
+    }
+  };
+
+  await new AssistantAgent({ client, tools, log: () => {} }).respond("Frena eso.", {
+    satelliteId: "memo",
+    history: [
+      { role: "user", content: "¿Qué está sonando?" },
+      { role: "assistant", content: "Está sonando una canción en simón." }
+    ]
+  });
+
+  assert.deepEqual(executed, [{ name: "music_pause", args: {} }]);
+});
+
+test("mantiene la guarda cuando una orden explícita de reproducir intenta pausar", async () => {
+  let turn = 0;
+  const client = { async chat(messages) {
+    turn += 1;
+    if (turn === 1) return { message: toolCall("music_pause", {}) };
+    if (turn === 2) {
+      assert.match(messages.at(-1).content, /requiere music_play; no ejecutes music_pause/);
+      return { message: toolCall("music_play", { query: "música", mode: "auto" }) };
+    }
+    return { message: { role: "assistant", content: "Reproduciendo." } };
+  } };
+  const executed = [];
+  const tools = {
+    definitions: () => [],
+    async execute(name, args) {
+      executed.push({ name, args });
+      return { status: "playing" };
+    }
+  };
+
+  await new AssistantAgent({ client, tools, log: () => {} }).respond("Pon música", { satelliteId: "memo" });
+
+  assert.deepEqual(executed, [{ name: "music_play", args: { query: "música", mode: "auto" } }]);
 });
 
 test("devuelve el error de una tool al LLM para que formule la respuesta", async () => {

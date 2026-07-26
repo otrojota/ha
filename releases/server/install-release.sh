@@ -36,6 +36,9 @@ npm ci --omit=dev
 if [ ! -f /etc/ha/server.env ]; then
   install -m 0640 -o root -g ha deploy/server.env.example /etc/ha/server.env
 fi
+if grep -qx 'MUSIC_ASSISTANT_IMAGE=ghcr.io/music-assistant/server:2.8.8' /etc/ha/server.env; then
+  sed -i 's|^MUSIC_ASSISTANT_IMAGE=ghcr.io/music-assistant/server:2.8.8$|MUSIC_ASSISTANT_IMAGE=ghcr.io/music-assistant/server:2.9.9|' /etc/ha/server.env
+fi
 if [ ! -f /etc/ha/server/music-assistant.env ]; then
   install -m 0600 -o ha -g ha /dev/null /etc/ha/server/music-assistant.env
 fi

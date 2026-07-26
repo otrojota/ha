@@ -30,6 +30,7 @@ export class MusicGatewayClient {
     return this.request(`/v1/music/playback${query}`, {}, satelliteId);
   }
   getLibraryRadios(satelliteId) { return this.request("/v1/music/radios", {}, satelliteId); }
+  getLibraryPlaylists(satelliteId) { return this.request("/v1/music/playlists", {}, satelliteId); }
   resume(destination, satelliteId) { return this.command("resume", { destination }, satelliteId); }
   next(destination, satelliteId) { return this.command("next", { destination }, satelliteId); }
   previous(destination, satelliteId) { return this.command("previous", { destination }, satelliteId); }

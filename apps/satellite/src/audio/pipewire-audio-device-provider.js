@@ -21,7 +21,24 @@ export class PipeWireAudioDeviceProvider extends AudioDeviceProvider {
         const activePort = Array.isArray(device.ports)
           ? device.ports.find((port) => port.name === device.active_port || port.name === device.active_port?.name)
           : null;
+        const outputIdentity = [
+          technicalId,
+          device.properties?.["device.profile.name"],
+          device.properties?.["alsa.card_name"],
+          device.properties?.["alsa.long_card_name"],
+          activePort?.name,
+          activePort?.type,
+          activePort?.description
+        ].filter(validText).join(" ").toLowerCase();
+        const internalOutputDescription = kind !== "output"
+          ? null
+          : /(?:^|[.\s_-])hdmi(?:$|[.\s_-])|displayport/.test(outputIdentity)
+            ? "Audio interno · HDMI"
+            : /bcm2835 headphones|platform-fe00b840\.mailbox/.test(outputIdentity)
+              ? "Audio interno · Jack 3,5 mm"
+              : null;
         const description = [
+          internalOutputDescription,
           device.description,
           device.properties?.["device.description"],
           device.properties?.["node.description"],

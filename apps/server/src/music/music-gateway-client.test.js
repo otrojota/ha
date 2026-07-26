@@ -47,3 +47,16 @@ test("consulta la cola de un destino explícito", async () => {
   assert.equal(request.url, "http://localhost:3100/v1/music/queue?destination=Sat%C3%A9lite%201");
   assert.equal(request.options.headers["X-Satellite-Id"], "satellite-rpi");
 });
+
+test("consulta playlists disponibles con alcance de satélite", async () => {
+  let request;
+  const client = new MusicGatewayClient({ fetchImpl: async (url, options) => {
+    request = { url, options };
+    return { ok: true, json: async () => ({ playlists: [] }) };
+  } });
+
+  await client.getLibraryPlaylists("satellite-rpi");
+
+  assert.equal(request.url, "http://localhost:3100/v1/music/playlists");
+  assert.equal(request.options.headers["X-Satellite-Id"], "satellite-rpi");
+});

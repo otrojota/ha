@@ -11,14 +11,9 @@ until curl -fsS "http://127.0.0.1:$PORT/" >/dev/null 2>&1; do
   sleep 1
 done
 
-exec chromium \
-  --kiosk \
-  --noerrdialogs \
-  --disable-infobars \
-  --no-first-run \
-  --disable-session-crashed-bubble \
-  --lang=es-CL \
-  --disable-features=Translate,TranslateUI \
-  --password-store=basic \
-  --ozone-platform=wayland \
+export COG_PLATFORM_NAME=wl
+export COG_PLATFORM_WL_VIEW_FULLSCREEN=1
+exec cog \
+  --webprocess-failure=restart \
+  --bg-color='#111827' \
   "http://localhost:$PORT"

@@ -21,11 +21,12 @@ export class HomeAutomationService {
     }));
   }
 
-  resolve(target, roomTarget) {
+  resolve(target, roomTarget, { domains = null } = {}) {
     const wanted = normalized(target);
     if (!wanted) throw new Error("Indica el nombre del dispositivo o habitación");
     const state = this.store.snapshot();
     let enabled = state.devices.filter((device) => device.enabled !== false);
+    if (domains?.length) enabled = enabled.filter((device) => domains.includes(device.domain));
     if (roomTarget) {
       const wantedRoom = normalized(roomTarget);
       const room = state.rooms.find((item) => normalized(item.name) === wantedRoom);
@@ -54,8 +55,8 @@ export class HomeAutomationService {
     throw new Error(`No existe un dispositivo o habitación que coincida con “${target}”`);
   }
 
-  async run(target, operation, room) {
-    const resolved = this.resolve(target, room);
+  async run(target, operation, room, options) {
+    const resolved = this.resolve(target, room, options);
     const devices = resolved.filter((device) => this.gateways.has(device.type, device.provider));
     if (!devices.length) throw new Error(`“${target}” no admite esta acción`);
     const results = await Promise.all(devices.map(async (device) => {
@@ -65,15 +66,15 @@ export class HomeAutomationService {
     return { affected: results.map(({ device }) => device), count: results.length, results };
   }
 
-  getState(target, room) { return this.run(target, (gateway, device) => gateway.getState(device), room); }
+  getState(target, room) { return this.run(target, (gateway, device) => gateway.getState(device), room, { domains: ["light"] }); }
   getCatalogState(target, room) {
     const devices = this.resolve(target, room);
     return { count: devices.length, devices: devices.map(({ name, entityId, domain, floor, room, state, unit, available, capabilities }) => ({
       name, entityId, domain, floor: floor || null, room: room || null, state, unit: unit || null, available, capabilities
     })) };
   }
-  setPower(target, on, room) { return this.run(target, (gateway, device) => gateway.setPower(device, on), room); }
-  setBrightness(target, percent, room) { return this.run(target, (gateway, device) => gateway.setBrightness(device, percent), room); }
-  setColorTemperature(target, percent, room) { return this.run(target, (gateway, device) => gateway.setColorTemperature(device, percent), room); }
-  setColor(target, color, room) { return this.run(target, (gateway, device) => gateway.setColor(device, color), room); }
+  setPower(target, on, room) { return this.run(target, (gateway, device) => gateway.setPower(device, on), room, { domains: ["light"] }); }
+  setBrightness(target, percent, room) { return this.run(target, (gateway, device) => gateway.setBrightness(device, percent), room, { domains: ["light"] }); }
+  setColorTemperature(target, percent, room) { return this.run(target, (gateway, device) => gateway.setColorTemperature(device, percent), room, { domains: ["light"] }); }
+  setColor(target, color, room) { return this.run(target, (gateway, device) => gateway.setColor(device, color), room, { domains: ["light"] }); }
 }

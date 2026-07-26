@@ -24,14 +24,14 @@ cp -R "$REPO_ROOT/packages/contracts" "$WORK_DIR/packages/contracts"
 cp -R "$REPO_ROOT/packages/shared" "$WORK_DIR/packages/shared"
 cp -R "$SCRIPT_DIR/systemd" "$WORK_DIR/deploy/systemd"
 cp "$SCRIPT_DIR/config/satellite.env" "$WORK_DIR/deploy/satellite.env.example"
-cp "$SCRIPT_DIR/display-server.mjs" "$SCRIPT_DIR/kiosk-start.sh" "$WORK_DIR/deploy/"
+cp "$SCRIPT_DIR/display-server.mjs" "$SCRIPT_DIR/kiosk-start.sh" "$SCRIPT_DIR/kiosk-start-chromium.sh" "$WORK_DIR/deploy/"
 cp "$SCRIPT_DIR/install-release.sh" "$SCRIPT_DIR/health-check.sh" "$SCRIPT_DIR/migrate-config-v2.mjs" "$WORK_DIR/"
 sed "s/\"version\": \"[^\"]*\"/\"version\": \"$VERSION\"/" "$SCRIPT_DIR/manifest.json" >"$WORK_DIR/release-manifest.json"
 printf '%s\n' "$VERSION" >"$WORK_DIR/VERSION"
 
 find "$WORK_DIR" -name '*.test.js' -delete
 find "$WORK_DIR" -type d -name '__pycache__' -prune -exec rm -rf {} +
-chmod +x "$WORK_DIR/install-release.sh" "$WORK_DIR/health-check.sh" "$WORK_DIR/deploy/kiosk-start.sh"
+chmod +x "$WORK_DIR/install-release.sh" "$WORK_DIR/health-check.sh" "$WORK_DIR/deploy/kiosk-start.sh" "$WORK_DIR/deploy/kiosk-start-chromium.sh"
 tar -C "$(dirname "$WORK_DIR")" -czf "$ARCHIVE" "$NAME"
 
 if command -v sha256sum >/dev/null 2>&1; then

@@ -48,6 +48,7 @@ import { createClearMusicQueueTool } from "./tools/music/clear-queue.tool.js";
 import { createListMusicSourcesTool } from "./tools/music/list-sources.tool.js";
 import { createSetActiveMusicSourceTool } from "./tools/music/set-active-source.tool.js";
 import { createListLibraryRadiosTool } from "./tools/music/list-library-radios.tool.js";
+import { createListLibraryPlaylistsTool } from "./tools/music/list-library-playlists.tool.js";
 import { readOrCreateServerIdentity } from "./discovery/server-identity.js";
 import { ServerAdvertiser } from "./discovery/server-advertiser.js";
 import { DeviceGatewayRegistry } from "./home-automation/device-gateway-registry.js";
@@ -140,6 +141,7 @@ tools.push(createScheduleAutomationTool({ scheduler: alarmScheduler, homeEnabled
 tools.push(createListMusicDestinationsTool({ music: musicGateway }));
 tools.push(createListMusicSourcesTool({ music: musicGateway }));
 tools.push(createListLibraryRadiosTool({ music: musicGateway }));
+tools.push(createListLibraryPlaylistsTool({ music: musicGateway }));
 tools.push(createSetActiveMusicSourceTool({ music: musicGateway }));
 tools.push(createSetActiveMusicDestinationTool({ music: musicGateway }));
 tools.push(createPlayMusicTool({ music: musicGateway }));

@@ -6,8 +6,8 @@ test("controla todas las luces de una habitación mediante su gateway", async ()
   const calls = [];
   const gateway = { setPower: async (device, on) => calls.push([device.name, on]) };
   const store = { snapshot: () => ({ rooms: [{ id: "room", name: "Living" }], devices: [
-    { id: "1", name: "Luz uno", roomId: "room", type: "rgb_bulb", provider: "home_assistant", enabled: true },
-    { id: "2", name: "Luz dos", roomId: "room", type: "rgb_bulb", provider: "home_assistant", enabled: true }
+    { id: "1", name: "Luz uno", domain: "light", roomId: "room", type: "rgb_bulb", provider: "home_assistant", enabled: true },
+    { id: "2", name: "Luz dos", domain: "light", roomId: "room", type: "rgb_bulb", provider: "home_assistant", enabled: true }
   ] }) };
   const service = new HomeAutomationService({ store, gateways: { has: () => true, get: () => gateway } });
   const result = await service.setPower("living", false);
@@ -38,4 +38,24 @@ test("resuelve Luz uno directamente cuando sólo existe Luz 1", () => {
   ] }) };
   const service = new HomeAutomationService({ store, gateways: { has: () => true, get: () => ({}) } });
   assert.equal(service.resolve("luz uno")[0].name, "Luz 1");
+});
+
+test("una operación de luz resuelve Simón sin confundir el enchufe Simón", async () => {
+  const calls = [];
+  const gateway = { setPower: async (device, on) => calls.push([device.name, on]) };
+  const store = { snapshot: () => ({
+    floors: [],
+    rooms: [{ id: "memo", name: "Pieza Memo" }],
+    devices: [
+      { id: "light.simon", name: "Luz Simón", domain: "light", roomId: "memo", type: "rgb_bulb", provider: "home_assistant", enabled: true },
+      { id: "switch.simon", name: "Enchufe Simón", domain: "switch", roomId: "memo", type: "switch", provider: "home_assistant", enabled: true },
+      { id: "sensor.simon_power", name: "Enchufe Simón Power", domain: "sensor", roomId: "memo", type: "sensor", provider: "home_assistant", enabled: true }
+    ]
+  }) };
+  const service = new HomeAutomationService({ store, gateways: { has: () => true, get: () => gateway } });
+
+  const result = await service.setPower("Simón", false);
+
+  assert.deepEqual(calls, [["Luz Simón", false]]);
+  assert.deepEqual(result.affected, ["Luz Simón"]);
 });

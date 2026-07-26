@@ -4,12 +4,12 @@ const elements = Object.fromEntries([
   "playback-volume", "playback-volume-value", "playback-previous", "playback-toggle", "playback-next", "playback-controls-status",
   "input-summary", "output-summary", "audio-title", "audio-help", "audio-status", "device-list",
   "channel-status", "channel-list", "audio-level-db", "audio-level-bar", "audio-level-peak", "conversation-panel", "listening-indicator", "listening-label",
-  "assistant-summary", "assistant-form", "assistant-name", "assistant-status", "connected-power-device"
+  "assistant-summary", "assistant-form", "assistant-name", "assistant-status", "connected-power-device", "connected-power-device-open", "connected-power-device-label"
   , "wake-word-enabled", "manual-listen"
   , "voice-summary", "voice-status", "voice-list"
   , "location-summary", "location-form", "location-city", "location-region", "location-country",
   "location-latitude", "location-longitude", "location-time-zone", "location-status", "detect-location"
-  , "llm-summary", "llm-form", "llm-provider", "llm-base-url-field", "llm-base-url", "llm-model",
+  , "llm-summary", "llm-form", "llm-provider", "llm-provider-open", "llm-provider-label", "llm-base-url-field", "llm-base-url", "llm-model",
   "llm-api-key-field", "llm-api-key", "llm-credential-status", "llm-temperature", "llm-context-field",
   "llm-context-length", "llm-keep-alive-field", "llm-keep-alive", "llm-think-field", "llm-think",
   "llm-test", "llm-delete-credential", "llm-status"
@@ -21,7 +21,8 @@ const elements = Object.fromEntries([
   , "home-devices-summary", "home-devices-status", "home-devices-list"
   , "home-assistant-form", "home-assistant-url", "home-assistant-token", "home-assistant-credential-status",
   "home-assistant-test", "home-assistant-delete-credential", "home-assistant-status",
-  "home-automation-setting", "system-info-summary", "system-info-status", "system-info-grid", "refresh-system-info"
+  "home-automation-setting", "system-info-summary", "system-info-status", "system-info-grid", "refresh-system-info",
+  "selection-back", "selection-title", "selection-help", "selection-list"
 ].map((id) => [id, document.getElementById(id)]));
 
 const playbackSource = document.createElement("div");
@@ -56,12 +57,15 @@ let lastAudioMeterUpdateAt = 0;
 let playbackSnapshot = null;
 let playbackReceivedAt = 0;
 let playbackVolumeEditing = false;
+let playbackVolumeCommitTimer = null;
 let lastNonEmptyPlaybackAt = 0;
 let playbackRequestGeneration = 0;
 let llmCredentialConfigured = false;
 let homeState = { floors: [], rooms: [], devices: [], refreshedAt: null, stale: true };
 let homeAssistantCredentialConfigured = false;
 let manualListenRequestPending = false;
+let connectedPowerOptions = [{ id: "", name: "Ninguno", description: "Sin enchufe asociado" }];
+let selectionReturnScreen = "settings-screen";
 
 const llmProviderDefaults = {
   ollama: { baseUrl: "http://127.0.0.1:11434", model: "qwen3.5:9b" },
@@ -69,6 +73,12 @@ const llmProviderDefaults = {
   "github-models": { baseUrl: "https://models.github.ai/inference", model: "openai/gpt-4.1" },
   "openai-compatible": { baseUrl: "", model: "" }
 };
+const llmProviderOptions = [
+  { id: "ollama", name: "Ollama", description: "Modelo local o servidor Ollama" },
+  { id: "openai", name: "OpenAI API", description: "API oficial de OpenAI" },
+  { id: "github-models", name: "GitHub Models", description: "Modelos disponibles mediante GitHub" },
+  { id: "openai-compatible", name: "API compatible con OpenAI", description: "Proveedor externo con API compatible" }
+];
 
 function weatherIconSvg(code, isDay) {
   const value = Number(code);
@@ -329,6 +339,8 @@ function renderPlayback(playback = {}) {
 }
 
 async function setPlaybackVolume() {
+  clearTimeout(playbackVolumeCommitTimer);
+  playbackVolumeCommitTimer = null;
   if (!musicApiUrl || elements["playback-volume"].disabled) return;
   const volumePercent = Number(elements["playback-volume"].value);
   elements["playback-volume"].disabled = true;
@@ -350,6 +362,14 @@ async function setPlaybackVolume() {
   } finally {
     playbackVolumeEditing = false;
   }
+}
+
+function schedulePlaybackVolumeCommit(delayMs = 0) {
+  clearTimeout(playbackVolumeCommitTimer);
+  playbackVolumeCommitTimer = setTimeout(() => {
+    playbackVolumeCommitTimer = null;
+    void setPlaybackVolume();
+  }, delayMs);
 }
 
 async function runPlaybackCommand(action) {
@@ -483,6 +503,7 @@ function renderLlmFields({ applyDefaults = false } = {}) {
 
 function fillLlmConfig(config) {
   elements["llm-provider"].value = config.provider;
+  elements["llm-provider-label"].textContent = llmProviderOptions.find((option) => option.id === config.provider)?.name || config.provider;
   elements["llm-base-url"].value = config.baseUrl || llmProviderDefaults[config.provider]?.baseUrl || "";
   elements["llm-model"].value = config.model || "";
   elements["llm-temperature"].value = config.temperature ?? 0.1;
@@ -491,7 +512,7 @@ function fillLlmConfig(config) {
   elements["llm-think"].checked = config.think === true;
   elements["llm-api-key"].value = "";
   llmCredentialConfigured = config.credential?.configured === true;
-  elements["llm-summary"].textContent = `${elements["llm-provider"].selectedOptions[0].textContent} · ${config.model}`;
+  elements["llm-summary"].textContent = `${elements["llm-provider-label"].textContent} · ${config.model}`;
   renderLlmFields();
 }
 
@@ -589,8 +610,6 @@ async function loadAssistantConfig() {
 }
 
 async function loadConnectedPowerDevices(selectedId = null) {
-  const select = elements["connected-power-device"];
-  const none = new Option("Ninguno", "");
   try {
     const catalog = await homeRequest("/devices", { cache: "no-store" });
     const switches = (catalog.devices || [])
@@ -598,22 +617,23 @@ async function loadConnectedPowerDevices(selectedId = null) {
       .sort((left, right) => [left.room || "", left.name || ""].join("/").localeCompare(
         [right.room || "", right.name || ""].join("/"), "es", { sensitivity: "base" }
       ));
-    const options = switches.map((device) => new Option(
-      `${device.name}${device.room ? ` · ${device.room}` : ""}`,
-      device.entityId || device.id
-    ));
+    connectedPowerOptions = [
+      { id: "", name: "Ninguno", description: "Sin enchufe asociado" },
+      ...switches.map((device) => ({
+        id: device.entityId || device.id,
+        name: device.name,
+        description: device.room || "Sin habitación"
+      }))
+    ];
     if (selectedId && !switches.some((device) => (device.entityId || device.id) === selectedId)) {
-      options.unshift(new Option(`${selectedId} · no disponible`, selectedId));
+      connectedPowerOptions.push({ id: selectedId, name: selectedId, description: "No disponible" });
     }
-    select.replaceChildren(none, ...options);
-    select.value = selectedId || "";
-    select.disabled = false;
   } catch {
-    if (selectedId) select.replaceChildren(none, new Option(`${selectedId} · no disponible`, selectedId));
-    else select.replaceChildren(none);
-    select.value = selectedId || "";
-    select.disabled = false;
+    connectedPowerOptions = [{ id: "", name: "Ninguno", description: "Sin enchufe asociado" }];
+    if (selectedId) connectedPowerOptions.push({ id: selectedId, name: selectedId, description: "No disponible" });
   }
+  elements["connected-power-device"].value = selectedId || "";
+  renderConnectedPowerDeviceLabel();
 }
 
 async function saveAssistantName(event) {
@@ -636,6 +656,7 @@ async function saveAssistantName(event) {
     elements["assistant-name"].value = result.config.name;
     elements["wake-word-enabled"].checked = result.config.wakeWordEnabled !== false;
     elements["connected-power-device"].value = result.config.connectedPowerDeviceId || "";
+    renderConnectedPowerDeviceLabel();
     elements["assistant-summary"].textContent = `${result.config.name} · ${result.config.wakeWordEnabled !== false ? "activación automática" : "sólo botón"}`;
     elements["assistant-status"].textContent = result.config.wakeWordEnabled
       ? `Configuración guardada. Di “${result.config.name}” o toca el micrófono.`
@@ -874,6 +895,33 @@ function showScreen(id) {
   });
 }
 
+function openSelectionScreen({ title, help, returnScreen, options, selectedId, onSelect }) {
+  selectionReturnScreen = returnScreen;
+  elements["selection-title"].textContent = title;
+  elements["selection-help"].textContent = help;
+  elements["selection-list"].replaceChildren(...options.map((option) => {
+    const selected = option.id === selectedId;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `device-option${selected ? " selected" : ""}`;
+    button.innerHTML = `<span><strong></strong><small></small></span><span class="selection-mark">${selected ? "✓" : ""}</span>`;
+    button.querySelector("strong").textContent = option.name;
+    button.querySelector("small").textContent = option.description || "";
+    button.addEventListener("click", () => {
+      onSelect(option);
+      showScreen(returnScreen);
+    });
+    return button;
+  }));
+  showScreen("selection-screen");
+}
+
+function renderConnectedPowerDeviceLabel() {
+  const selectedId = elements["connected-power-device"].value;
+  const selected = connectedPowerOptions.find((option) => option.id === selectedId);
+  elements["connected-power-device-label"].textContent = selected?.name || selectedId || "Ninguno";
+}
+
 function formatBytes(value) {
   if (!Number.isFinite(value)) return "No disponible";
   const units = ["B", "KB", "MB", "GB", "TB"];
@@ -1000,6 +1048,40 @@ function enableConfigurationDragScrolling() {
     }, true);
     screen.addEventListener("wheel", stopInertia, { passive: true });
   });
+}
+
+function enableTouchButtonActivation() {
+  let press = null;
+  let suppressTrustedClicksUntil = 0;
+
+  document.addEventListener("pointerdown", (event) => {
+    const button = event.target.closest("button");
+    press = event.isPrimary && event.button === 0 && button && !button.disabled
+      ? { button, pointerId: event.pointerId, x: event.clientX, y: event.clientY, moved: false }
+      : null;
+  }, true);
+
+  document.addEventListener("pointermove", (event) => {
+    if (!press || event.pointerId !== press.pointerId) return;
+    if (Math.hypot(event.clientX - press.x, event.clientY - press.y) > 10) press.moved = true;
+  }, true);
+
+  document.addEventListener("pointerup", (event) => {
+    if (!press || event.pointerId !== press.pointerId) return;
+    const { button, moved } = press;
+    press = null;
+    if (moved || event.target.closest("button") !== button || button.disabled) return;
+    suppressTrustedClicksUntil = performance.now() + 1500;
+    event.preventDefault();
+    button.click();
+  }, true);
+
+  document.addEventListener("pointercancel", () => { press = null; }, true);
+  document.addEventListener("click", (event) => {
+    if (!event.isTrusted || performance.now() >= suppressTrustedClicksUntil) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }, true);
 }
 
 function deviceName(kind, id) {
@@ -1371,6 +1453,7 @@ async function connect(generation = displaySocketGeneration) {
   });
 }
 
+enableTouchButtonActivation();
 document.querySelectorAll("[data-screen]").forEach((button) => button.addEventListener("click", async () => {
   showScreen(button.dataset.screen);
   if (button.dataset.screen === "settings-screen") {
@@ -1397,10 +1480,33 @@ document.querySelectorAll("[data-screen]").forEach((button) => button.addEventLi
 elements["refresh-system-info"].addEventListener("click", loadSystemInformation);
 document.querySelectorAll("[data-audio-kind]").forEach((button) => button.addEventListener("click", () => openAudio(button.dataset.audioKind)));
 elements["assistant-form"].addEventListener("submit", saveAssistantName);
+elements["connected-power-device-open"].addEventListener("click", () => openSelectionScreen({
+  title: "Enchufe asociado",
+  help: "Selecciona el enchufe que alimenta este satélite.",
+  returnScreen: "assistant-screen",
+  options: connectedPowerOptions,
+  selectedId: elements["connected-power-device"].value,
+  onSelect: (option) => {
+    elements["connected-power-device"].value = option.id;
+    renderConnectedPowerDeviceLabel();
+  }
+}));
 elements["manual-listen"].addEventListener("click", startManualListening);
 elements["location-form"].addEventListener("submit", saveLocation);
 elements["detect-location"].addEventListener("click", detectLocation);
-elements["llm-provider"].addEventListener("change", () => renderLlmFields({ applyDefaults: true }));
+elements["llm-provider-open"].addEventListener("click", () => openSelectionScreen({
+  title: "Proveedor del modelo",
+  help: "Selecciona el servicio que ejecutará el modelo de lenguaje.",
+  returnScreen: "llm-screen",
+  options: llmProviderOptions,
+  selectedId: elements["llm-provider"].value,
+  onSelect: (option) => {
+    elements["llm-provider"].value = option.id;
+    elements["llm-provider-label"].textContent = option.name;
+    renderLlmFields({ applyDefaults: true });
+  }
+}));
+elements["selection-back"].addEventListener("click", () => showScreen(selectionReturnScreen));
 elements["llm-form"].addEventListener("submit", saveLlmConfiguration);
 elements["llm-test"].addEventListener("click", testLlmConfiguration);
 elements["llm-delete-credential"].addEventListener("click", deleteLlmCredential);
@@ -1422,11 +1528,12 @@ elements["playback-volume"].addEventListener("pointerdown", () => { playbackVolu
 elements["playback-volume"].addEventListener("input", () => {
   playbackVolumeEditing = true;
   elements["playback-volume-value"].textContent = `${elements["playback-volume"].value}%`;
+  schedulePlaybackVolumeCommit(350);
 });
-elements["playback-volume"].addEventListener("change", () => void setPlaybackVolume());
-elements["playback-volume"].addEventListener("pointerup", () => { playbackVolumeEditing = false; });
-elements["playback-volume"].addEventListener("pointercancel", () => { playbackVolumeEditing = false; });
-elements["playback-volume"].addEventListener("blur", () => { playbackVolumeEditing = false; });
+elements["playback-volume"].addEventListener("change", () => schedulePlaybackVolumeCommit());
+elements["playback-volume"].addEventListener("pointerup", () => schedulePlaybackVolumeCommit());
+elements["playback-volume"].addEventListener("pointercancel", () => schedulePlaybackVolumeCommit());
+elements["playback-volume"].addEventListener("blur", () => schedulePlaybackVolumeCommit());
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden) void loadCurrentPlayback();
 });
