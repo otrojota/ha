@@ -1,14 +1,15 @@
-# Primer release del satélite para Raspberry Pi
+# Release del satélite para Raspberry Pi
 
-Esta receta genera e instala `ha-satellite` 0.1.32 en Raspberry Pi OS Lite de
-64 bits. Está dirigida inicialmente a Raspberry Pi 4 con pantalla táctil
-oficial, PipeWire y Chromium Kiosk sobre Wayland/Labwc.
+Esta receta genera e instala la versión indicada en
+`releases/satellite/manifest.json` en Raspberry Pi OS Lite de 64 bits. Está
+dirigida a Raspberry Pi 4 con pantalla táctil, PipeWire y Cog/WPE sobre
+Wayland/Labwc.
 
 ## Qué instala el bootstrap
 
 - Node.js 20.
 - PipeWire, herramientas PulseAudio y FFmpeg.
-- Wayland/Labwc, Chromium y `wlr-randr`, sin el conjunto completo de
+- Wayland/Labwc, Cog/WPE, Chromium de respaldo y `wlr-randr`, sin el conjunto completo de
   aplicaciones de escritorio. La selección de Labwc y Desktop Autologin se
   realiza manualmente en `raspi-config`, porque sus opciones no son estables
   entre versiones de Raspberry Pi OS.
@@ -16,7 +17,7 @@ oficial, PipeWire y Chromium Kiosk sobre Wayland/Labwc.
 - Piper 1.4.2 y la voz española `es_ES-sharvard-medium`.
 - El cliente oficial Sendspin mediante `uv` y Python 3.12.
 - Servicios `ha-display.service` y `ha-satellite.service`.
-- Inicio automático de Chromium en `http://localhost:8080` cuando no existe ya
+- Inicio automático de Cog/WPE en `http://localhost:8080` cuando no existe ya
   una entrada equivalente en el autostart de Labwc.
 
 El proceso de voz se ejecuta con el usuario normal de Raspberry Pi OS para
@@ -34,8 +35,8 @@ Desde la raíz del monorepo:
 El resultado es:
 
 ```text
-releases/dist/ha-satellite-0.1.32-linux-arm64.tar.gz
-releases/dist/ha-satellite-0.1.32-linux-arm64.tar.gz.sha256
+releases/dist/ha-satellite-X.Y.Z-linux-arm64.tar.gz
+releases/dist/ha-satellite-X.Y.Z-linux-arm64.tar.gz.sha256
 ```
 
 ## Probar un artefacto local en la Raspberry Pi
@@ -44,15 +45,18 @@ Después de copiar el `.tar.gz` a la Raspberry:
 
 ```bash
 sudo HA_SATELLITE_USER="$USER" \
-  HA_RELEASE_ARCHIVE="$PWD/ha-satellite-0.1.32-linux-arm64.tar.gz" \
+  HA_RELEASE_ARCHIVE="$PWD/ha-satellite-X.Y.Z-linux-arm64.tar.gz" \
   ./releases/satellite/install.sh
 ```
 
-Para una GitHub Release publicada con tag `satellite-v0.1.32`:
+Para una GitHub Release publicada con tag `satellite-vX.Y.Z`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/otrojota/ha/main/releases/satellite/install.sh | sudo sh
 ```
+
+Para las actualizaciones habituales de `ha-satellite` y `ha-memo`, seguir el
+runbook de `INSTALACION.txt`.
 
 ## Configuración y datos persistentes
 

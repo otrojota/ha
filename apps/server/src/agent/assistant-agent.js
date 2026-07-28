@@ -536,6 +536,9 @@ export class AssistantAgent {
           messages.push({ role: "tool", tool_name: name, content: JSON.stringify(result) });
         } catch (error) {
           this.log("warn", "Tool finalizada con error", { name, error: error.message });
+          if (name === "music_set_volume" && /parlante aún no ha sido descubierto por el servidor/i.test(error.message)) {
+            return `${error.message}.`;
+          }
           messages.push({ role: "tool", tool_name: name, content: JSON.stringify({ error: error.message }) });
         }
       }

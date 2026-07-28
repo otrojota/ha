@@ -16,3 +16,4 @@ install_wrapper() {
 
 install_wrapper ha-server server
 install_wrapper ha-satellite satellite
+install_wrapper ha-memo satellite

@@ -35,6 +35,23 @@ test("el tool calling del LLM es la fuente de intención y conserva sus argument
   assert.equal(answer, "Volumen ajustado al cincuenta por ciento.");
 });
 
+test("informa directamente cuando el parlante aún no fue descubierto al ajustar volumen", async () => {
+  const client = { async chat() {
+    return { message: toolCall("music_set_volume", { changePercent: 10 }) };
+  } };
+  const tools = {
+    definitions: () => [],
+    async execute() {
+      throw new Error("El parlante aún no ha sido descubierto por el servidor. Espera unos minutos y vuelve a intentarlo");
+    }
+  };
+
+  const answer = await new AssistantAgent({ client, tools, log: () => {} })
+    .respond("Sube el volumen", { satelliteId: "rpi" });
+
+  assert.equal(answer, "El parlante aún no ha sido descubierto por el servidor. Espera unos minutos y vuelve a intentarlo.");
+});
+
 test("rechaza un brillo que contradice el porcentaje explícito del comando", async () => {
   let turn = 0;
   const executed = [];

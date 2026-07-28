@@ -6,7 +6,7 @@ Esta carpeta contiene la receta de distribución del servidor. Los artefactos ge
 
 `install.sh` soporta Fedora estándar en `x86_64` y `aarch64`, incluida Fedora Asahi Remix, y Raspberry Pi OS Lite de 64 bits en `aarch64`. La detección de Asahi es informativa: se usan paquetes Fedora y binarios ARM64 nativos, sin emulación x86. Raspberry Pi OS de 32 bits se rechaza porque no existe un artefacto `armv7`.
 
-Cuando exista la GitHub Release `v0.1.16`:
+Cuando exista la GitHub Release `vX.Y.Z`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/otrojota/ha/main/releases/server/install.sh | sudo sh
@@ -15,7 +15,7 @@ curl -fsSL https://raw.githubusercontent.com/otrojota/ha/main/releases/server/in
 Para probar un artefacto construido localmente antes de publicarlo:
 
 ```bash
-sudo HA_RELEASE_ARCHIVE="$PWD/releases/dist/ha-server-0.1.16-linux-arm64.tar.gz" \
+sudo HA_RELEASE_ARCHIVE="$PWD/releases/dist/ha-server-X.Y.Z-linux-arm64.tar.gz" \
   ./releases/server/install.sh
 ```
 
@@ -40,7 +40,7 @@ Desde la raíz del repositorio:
 Para indicar otra versión:
 
 ```bash
-./releases/server/package.sh 0.1.16
+./releases/server/package.sh X.Y.Z
 ```
 
 El resultado contiene el backend, Music Gateway, dependencias de workspace y los archivos de despliegue. No contiene configuración local, credenciales, datos persistentes ni modelos.
@@ -50,8 +50,8 @@ El resultado contiene el backend, Music Gateway, dependencias de workspace y los
 El instalador de la release supone que Node, npm, Docker Compose y `whisper-cli` ya están instalados. Ollama sólo es necesario cuando se elige como proveedor local. Esa preparación corresponderá al bootstrap público.
 
 ```bash
-tar -xzf ha-server-0.1.16-linux-x64.tar.gz
-sudo ./ha-server-0.1.16/install-release.sh
+tar -xzf ha-server-X.Y.Z-linux-ARCH.tar.gz
+sudo ./ha-server-X.Y.Z/install-release.sh
 ```
 
 La instalación crea una release inmutable en `/opt/ha/releases/<version>`, conserva `/etc/ha/server.env` si ya existe y usa `/var/lib/ha` para datos y modelos.
@@ -64,3 +64,6 @@ sudo systemctl start ha-containers ha-music-gateway ha-server
 ```
 
 Music Assistant requiere crear su administrador en `http://IP_DEL_SERVIDOR:8095`. La autenticación de Music Gateway se completa posteriormente desde el display.
+
+Para las actualizaciones habituales de `ha-server`, seguir el runbook de
+`INSTALACION.txt`.

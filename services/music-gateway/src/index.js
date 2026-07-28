@@ -18,6 +18,7 @@ const store = new DestinationStore(env("MUSIC_CONFIG_PATH", configPath("/etc/ha/
 const musicAssistantEnvPath = env("MUSIC_ASSISTANT_ENV_PATH", configPath("/etc/ha/server/music-assistant.env", "dev/server/.music-assistant.env"));
 const volumeOverrides = new Map();
 const VOLUME_CONFIRMATION_TIMEOUT_MS = 5000;
+const DESTINATION_DISCOVERY_MESSAGE = "El parlante aún no ha sido descubierto por el servidor. Espera unos minutos y vuelve a intentarlo";
 const catalogRefreshMs = Math.max(10_000, Number(env("MUSIC_CATALOG_REFRESH_MS", "60000")) || 60_000);
 let catalog = { players: [], sources: [], refreshedAt: null, stale: true, error: null };
 let catalogRefreshPromise = null;
@@ -130,7 +131,8 @@ async function destination(query, { activate = true, scope } = {}) {
   const players = (await musicCatalog()).players.map(effectivePlayerVolume);
   if (activate && query) return store.setActive(players, query, scope);
   const result = store.resolve(players, query, scope);
-  if (!result) throw new Error("No hay un destino activo en Music Assistant");
+  if (!result) throw new Error(DESTINATION_DISCOVERY_MESSAGE);
+  if (!query && !result.available) throw new Error(DESTINATION_DISCOVERY_MESSAGE);
   return result;
 }
 
