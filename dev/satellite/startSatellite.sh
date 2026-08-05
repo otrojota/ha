@@ -59,6 +59,24 @@ ensure_sendspin() {
 
 ensure_sendspin
 
+ensure_openwakeword() {
+  PYTHON=${OPENWAKEWORD_PYTHON:-${VOSK_PYTHON:-dev/satellite/.venv/bin/python}}
+  case "$PYTHON" in
+    /*) ;;
+    *) PYTHON="$REPO_ROOT/$PYTHON" ;;
+  esac
+  if [ ! -x "$PYTHON" ]; then
+    echo "No se encontró el entorno Python del detector en $PYTHON."
+    exit 1
+  fi
+  if ! "$PYTHON" -c 'import numpy, onnxruntime, openwakeword' >/dev/null 2>&1; then
+    echo "Instalando openWakeWord y ONNX Runtime en el entorno del satélite…"
+    "$PYTHON" -m pip install -r "$REPO_ROOT/apps/satellite/requirements-wake-word.txt"
+  fi
+}
+
+ensure_openwakeword
+
 if [ "${WAKE_WORD_PROVIDER:-vosk}" = "vosk" ]; then
   cd "$REPO_ROOT"
   if [ ! -x "${VOSK_PYTHON:-dev/satellite/.venv/bin/python}" ]; then

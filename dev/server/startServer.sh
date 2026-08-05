@@ -123,16 +123,18 @@ else
 fi
 docker compose -f "$MUSIC_ASSISTANT_COMPOSE" up -d
 WAIT=0
-while ! curl -fsS "${MUSIC_ASSISTANT_URL:-http://127.0.0.1:8095}/" >/dev/null 2>&1 && [ "$WAIT" -lt 120 ]; do
+MUSIC_ASSISTANT_STARTUP_TIMEOUT_SECONDS=${MUSIC_ASSISTANT_STARTUP_TIMEOUT_SECONDS:-30}
+while ! curl -fsS "${MUSIC_ASSISTANT_URL:-http://127.0.0.1:8095}/" >/dev/null 2>&1 && [ "$WAIT" -lt "$MUSIC_ASSISTANT_STARTUP_TIMEOUT_SECONDS" ]; do
   sleep 1
   WAIT=$((WAIT + 1))
 done
 if ! curl -fsS "${MUSIC_ASSISTANT_URL:-http://127.0.0.1:8095}/" >/dev/null 2>&1; then
-  echo "Music Assistant no pudo iniciarse o no está accesible en ${MUSIC_ASSISTANT_URL:-http://127.0.0.1:8095}."
+  echo "Advertencia: Music Assistant no está accesible en ${MUSIC_ASSISTANT_URL:-http://127.0.0.1:8095}."
   echo "Revisa: docker compose -f $MUSIC_ASSISTANT_COMPOSE logs"
-  exit 1
+  echo "El servidor continuará; las funciones que no dependen de música seguirán disponibles."
+else
+  echo "Music Assistant disponible en ${MUSIC_ASSISTANT_URL:-http://127.0.0.1:8095}"
 fi
-echo "Music Assistant disponible en ${MUSIC_ASSISTANT_URL:-http://127.0.0.1:8095}"
 if [ "$MUSIC_GATEWAY_ALREADY_RUNNING" = true ] && find services/music-gateway/src -type f -newer "$MUSIC_GATEWAY_PID_FILE" -print -quit | grep -q .; then
   MUSIC_GATEWAY_PID=$(cat "$MUSIC_GATEWAY_PID_FILE")
   if kill -0 "$MUSIC_GATEWAY_PID" 2>/dev/null; then kill "$MUSIC_GATEWAY_PID"; fi
@@ -166,6 +168,16 @@ if [ "$MUSIC_GATEWAY_ALREADY_RUNNING" = false ]; then
   echo "Music Gateway iniciado (PID $MUSIC_GATEWAY_PID). Log: $MUSIC_GATEWAY_LOG"
 else
   echo "Music Gateway ya está ejecutándose (PID $(cat "$MUSIC_GATEWAY_PID_FILE"))."
+fi
+if [ "$SERVER_ALREADY_RUNNING" = true ] && {
+  find apps/server/src apps/server/public -type f -newer "$PID_FILE" -print -quit 2>/dev/null | grep -q . \
+    || [ apps/server/package.json -nt "$PID_FILE" ]
+}; then
+  SERVER_PID=$(cat "$PID_FILE")
+  if kill -0 "$SERVER_PID" 2>/dev/null; then kill "$SERVER_PID"; fi
+  rm -f "$PID_FILE"
+  SERVER_ALREADY_RUNNING=false
+  echo "El servidor se reiniciará para aplicar cambios de código o assets web."
 fi
 if [ "$SERVER_ALREADY_RUNNING" = true ]; then
   echo "El servidor ya está ejecutándose (PID $(cat "$PID_FILE")). Dependencias verificadas."

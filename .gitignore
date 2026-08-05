@@ -20,6 +20,8 @@ releases/work/
 *.log.*
 npm-debug.log*
 *.tmp
+__pycache__/
+*.pyc
 
 # Bases de datos, certificados y claves generados localmente
 *.db
@@ -51,6 +53,8 @@ dev/server/.music-assistant.env
 
 # Modelos y entornos locales grandes
 dev/server/models/
+dev/server/wake-word/
+dev/server/wake-word-trainer/
 dev/satellite/models/
 dev/satellite/.venv/
 dev/satellite/.tools/

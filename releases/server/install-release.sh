@@ -25,7 +25,7 @@ if ! id ha >/dev/null 2>&1; then
   useradd --system --home-dir /var/lib/ha --shell /usr/sbin/nologin ha
 fi
 
-mkdir -p /opt/ha/releases /etc/ha/server /var/lib/ha/models/whisper /var/lib/ha/music-assistant /var/lib/ha/home-assistant
+mkdir -p /opt/ha/releases /etc/ha/server /var/lib/ha/models/whisper /var/lib/ha/music-assistant /var/lib/ha/home-assistant /var/lib/ha/wake-word /var/lib/ha/wake-word-trainer
 if [ ! -d "$RELEASE_DIR" ]; then
   cp -R "$SOURCE_DIR" "$RELEASE_DIR"
 fi

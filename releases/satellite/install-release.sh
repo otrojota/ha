@@ -31,13 +31,16 @@ SATELLITE_UID=$(id -u "$SATELLITE_USER")
 SATELLITE_GROUP=$(id -gn "$SATELLITE_USER")
 SATELLITE_HOME=$(getent passwd "$SATELLITE_USER" | cut -d: -f6)
 
-mkdir -p /opt/ha/releases /etc/ha/satellite /var/lib/ha/models/piper
+mkdir -p /opt/ha/releases /etc/ha/satellite /var/lib/ha/models/piper /var/lib/ha/models/wake-word
 if [ ! -d "$RELEASE_DIR" ]; then
   cp -R "$SOURCE_DIR" "$RELEASE_DIR"
 fi
 
 cd "$RELEASE_DIR"
 npm ci --omit=dev
+/opt/ha/venvs/satellite/bin/pip install \
+  -r "$RELEASE_DIR/apps/satellite/requirements-wake-word.txt"
+/opt/ha/venvs/satellite/bin/pip install --no-deps 'openwakeword==0.6.0'
 
 if [ ! -f /etc/ha/satellite.env ]; then
   install -m 0640 -o root -g "$SATELLITE_GROUP" deploy/satellite.env.example /etc/ha/satellite.env
@@ -60,7 +63,7 @@ for GROUP in audio video render input; do
 done
 
 chown -R root:root "$RELEASE_DIR"
-chown -R "$SATELLITE_USER:$SATELLITE_GROUP" /etc/ha/satellite /var/lib/ha/models/piper
+chown -R "$SATELLITE_USER:$SATELLITE_GROUP" /etc/ha/satellite /var/lib/ha/models/piper /var/lib/ha/models/wake-word
 ln -sfn "$RELEASE_DIR" /opt/ha/current
 
 sed \
@@ -73,6 +76,18 @@ sed \
   -e "s/@@SATELLITE_GROUP@@/$SATELLITE_GROUP/g" \
   -e "s/@@SATELLITE_UID@@/$SATELLITE_UID/g" \
   deploy/systemd/ha-satellite.service >/etc/systemd/system/ha-satellite.service
+for OBSOLETE_EMEET_UNIT in \
+  ha-emeet-audio-init.timer \
+  ha-emeet-audio-init.path \
+  ha-emeet-audio-init.service \
+  ha-emeet-audio-save.service; do
+  systemctl disable --now "$OBSOLETE_EMEET_UNIT" 2>/dev/null || true
+done
+rm -f /etc/systemd/system/ha-emeet-audio-init.timer \
+  /etc/systemd/system/ha-emeet-audio-init.path \
+  /etc/systemd/system/ha-emeet-audio-init.service \
+  /etc/systemd/system/ha-emeet-audio-save.service \
+  /var/lib/ha/emeet-volume
 chmod 0644 /etc/systemd/system/ha-display.service /etc/systemd/system/ha-satellite.service
 
 mkdir -p "$SATELLITE_HOME/.config/labwc"

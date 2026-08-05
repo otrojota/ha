@@ -34,6 +34,30 @@ test("desarma por completo una ventana de comando interrumpida", () => {
   assert.equal(capture.commandWindowMs, 0);
   assert.equal(capture.commandExpiresAt, 0);
   assert.equal(capture.bridgeCurrentPhrase, false);
+  assert.equal(capture.bridgeAfterCurrentPhrase, false);
+});
+
+test("puede separar el comando desde el instante de una activación en curso", () => {
+  const capture = new VoiceCapture({
+    readConfig: async () => ({}),
+    onPhrase: async () => {},
+    log: () => {}
+  });
+  capture.arm(8_000, { bridgeCurrentPhrase: true });
+  assert.equal(capture.bridgeCurrentPhrase, true);
+  assert.equal(capture.commandWindowMs, 8_000);
+  assert.ok(capture.commandExpiresAt > Date.now());
+});
+
+test("puede iniciar el comando al terminar la wake word sin reiniciar el audio", () => {
+  const capture = new VoiceCapture({
+    readConfig: async () => ({}),
+    onPhrase: async () => {},
+    log: () => {}
+  });
+  capture.arm(8_000, { bridgeAfterCurrentPhrase: true });
+  assert.equal(capture.bridgeCurrentPhrase, false);
+  assert.equal(capture.bridgeAfterCurrentPhrase, true);
 });
 
 test("puede detener y reiniciar la captura sin reutilizar el ciclo anterior", () => {

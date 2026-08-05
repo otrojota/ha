@@ -37,7 +37,10 @@ sed "s/\"version\": \"[^\"]*\"/\"version\": \"$VERSION\"/" "$SCRIPT_DIR/manifest
 printf '%s\n' "$VERSION" > "$WORK_DIR/VERSION"
 
 find "$WORK_DIR" -name '*.test.js' -delete
-chmod +x "$WORK_DIR/install-release.sh" "$WORK_DIR/health-check.sh"
+find "$WORK_DIR" -type d -name '__pycache__' -prune -exec rm -rf {} +
+find "$WORK_DIR" -name '*.pyc' -delete
+chmod +x "$WORK_DIR/install-release.sh" "$WORK_DIR/health-check.sh" \
+  "$WORK_DIR/apps/server/wake-word-trainer/run.sh"
 tar -C "$(dirname "$WORK_DIR")" -czf "$ARCHIVE" "$NAME"
 
 if command -v sha256sum >/dev/null 2>&1; then

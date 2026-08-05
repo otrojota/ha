@@ -11,6 +11,7 @@ export const EventType = Object.freeze({
   ASSISTANT_PROCESSING: "assistant.processing.started",
   ASSISTANT_RESPONSE: "assistant.response.created",
   ASSISTANT_SPEECH_REQUESTED: "assistant.speech.requested",
+  MICROPHONE_MONITORING_CHANGED: "voice.microphone-monitoring.changed",
   PLAYBACK_CHANGED: "music.playback.changed",
   WEATHER_UPDATED: "weather.updated"
 });

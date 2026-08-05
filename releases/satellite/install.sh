@@ -81,7 +81,10 @@ fi
 echo "Preparando Vosk y Piper…"
 python3 -m venv /opt/ha/venvs/satellite
 /opt/ha/venvs/satellite/bin/python -m pip install --upgrade pip
-/opt/ha/venvs/satellite/bin/pip install 'vosk==0.3.45' 'piper-tts==1.4.2'
+/opt/ha/venvs/satellite/bin/pip install 'vosk==0.3.45' 'piper-tts==1.4.2' \
+  'numpy>=1.24,<3' 'onnxruntime>=1.17,<2' 'requests>=2,<3' \
+  'scikit-learn>=1,<2' 'scipy>=1.3,<2' 'tqdm>=4,<5'
+/opt/ha/venvs/satellite/bin/pip install --no-deps 'openwakeword==0.6.0'
 
 mkdir -p /var/lib/ha/models /var/lib/ha/models/piper
 if [ ! -d "/var/lib/ha/models/$VOSK_MODEL" ]; then

@@ -107,11 +107,95 @@ El nombre y palabra de activación se persisten en `dev/satellite/config/assista
 
 El servidor ejecuta `whisper-cli`, configurable mediante `WHISPER_CLI`, usando el modelo indicado por `WHISPER_MODEL_PATH`. La configuración inicial espera el modelo multilingüe `small` en `dev/server/models/ggml-small.bin`. En macOS puede instalarse el ejecutable con `brew install whisper-cpp`; en Linux debe compilarse o instalarse `whisper.cpp` para la plataforma del servidor. `WHISPER_NO_GPU=true` fuerza CPU cuando el backend gráfico no está disponible o no es estable; puede cambiarse a `false` en el servidor definitivo.
 
+## Modelos entrenados de wake word
+
+El servidor expone la administración en `http://localhost:3000/wake-word/`. Cada
+modelo tiene un único archivo vigente, sin versiones. Reemplazarlo actualiza de
+forma monotónica su `modifiedAt`, el mtime real, SHA-256, `Last-Modified` y
+`ETag`; un satélite puede comparar ese timestamp con el archivo descargado y
+ofrecer la actualización cuando cambie.
+
+En desarrollo los datos se guardan por defecto en `dev/server/wake-word`; en
+producción, en `/var/lib/ha/wake-word`. La web permite crear modelos, cargar o
+reemplazar un ONNX y acumular muestras WAV positivas y negativas. Puede cargar
+archivos o grabar directamente desde un micrófono seleccionado en el navegador;
+cada toma se convierte a WAV PCM y se sube al servidor. El catálogo y las
+descargas están bajo `/api/wake-word/models`.
+
+La sección “Probar modelo” graba audio sin incorporarlo inicialmente al
+dataset, ejecuta el ONNX con el mismo barrido temporal del satélite y muestra
+score, umbral y decisión. Una prueba útil puede agregarse después al
+entrenamiento como positiva o negativa desde el mismo resultado.
+
+Los navegadores sólo permiten capturar micrófono en un contexto seguro. En
+desarrollo funciona en `http://localhost:3000/wake-word/`. Para administrar el
+servidor remoto sin HTTPS se puede abrir un túnel local:
+
+```bash
+ssh -L 3000:127.0.0.1:3000 ha-server
+```
+
+y entrar a `http://localhost:3000/wake-word/`.
+
+El entrenamiento se ejecuta fuera del proceso HTTP. El repositorio incluye
+`apps/server/wake-word-trainer/run.sh`, que se selecciona automáticamente. En
+el primer uso instala de forma aislada `uv`, Python 3.11 y sus dependencias, y
+descarga a caché las voces españolas de Piper y los extractores ONNX de
+openWakeWord. Funciona por CPU tanto en macOS Apple Silicon como en Fedora
+ARM64; no modifica el Python del sistema.
+
+El entrenador sintetiza adultos de distintas regiones y géneros, agrega
+variaciones de velocidad, ganancia, reverberación y ruido, incorpora las
+muestras positivas y negativas cargadas en la web y genera un clasificador
+ONNX. Los entrenamientos posteriores reutilizan todo lo descargado. La primera
+ejecución requiere Internet y demora más.
+
+Al seleccionar un ONNX, el satélite puede habilitar “Modo entrenamiento”. En
+ese modo conserva el audio que produjo cada activación: lo envía como positivo
+sólo cuando el agente terminó correctamente el comando, y permite marcar una
+activación como “Detección falsa” desde el display para enviarla como negativa.
+Fuera de ese modo no se recolecta audio de entrenamiento.
+
+Cada diez minutos el servidor revisa si existen muestras posteriores al ONNX
+vigente y, si no hay otro entrenamiento activo, inicia uno automáticamente.
+El intervalo se configura con `WAKE_WORD_AUTO_TRAIN_INTERVAL_MS`. El satélite
+consulta cada minuto el modelo activo, configurable con
+`WAKE_WORD_MODEL_REFRESH_MS`, y descarga y recarga en caliente cualquier cambio
+de SHA-256 o `modifiedAt`.
+
+`WAKE_WORD_TRAINER_RUNTIME_PATH` permite cambiar la ubicación del entorno y la
+caché. Por defecto usa `dev/server/wake-word-trainer/.runtime` en desarrollo y
+`/var/lib/ha/wake-word-trainer` en una instalación del servidor. Para sustituir
+el entrenador incluido, `WAKE_WORD_TRAINER_EXECUTABLE` puede apuntar a otro
+ejecutable que acepte:
+
+```text
+--model-id ID --wake-word FRASE --model-dir DIRECTORIO \
+--output ARCHIVO_ONNX --config-json JSON
+```
+
+Debe terminar con código cero y escribir el ONNX en `--output`. Sólo entonces
+el servidor reemplaza atómicamente el archivo vigente. Si falla, conserva el
+modelo anterior.
+
 La captura usa `ffmpeg`, respeta `inputDeviceId` e `inputChannel`, extrae sólo ese canal y genera audio WAV mono PCM de 16 kHz. Una pausa de aproximadamente 800 ms marca el final de la frase. Las frases sin la palabra de activación se descartan y no se muestran ni se envían al LLM.
 
 ### Palabra de activación local
 
 El satélite usa Vosk con el modelo español pequeño y una gramática dinámica formada por el nombre configurado y `[unk]`. Cambiar el nombre no requiere entrenar otro modelo. La palabra debe existir en el vocabulario español de Vosk; el detector mediante Whisper queda como fallback si Vosk no puede iniciarse.
+
+Cuando “Activación por nombre” está habilitada, el display permite conservar
+Vosk o seleccionar uno de los modelos ONNX publicados por el servidor. El
+satélite consulta `/api/wake-word/models`, descarga el modelo con verificación
+SHA-256 y conserva su metadata bajo `dev/satellite/models/wake-word` en
+desarrollo o `/var/lib/ha/models/wake-word` en Raspberry.
+
+Al arrancar compara `modifiedAt` y SHA-256 del modelo seleccionado con el
+catálogo y lo actualiza si cualquiera cambió. Si el servidor está temporalmente inaccesible utiliza la
+copia local verificada. Al entrar a la configuración vuelve a consultar el
+catálogo y ofrece “Descargar actualización” cuando corresponde. El detector
+ONNX usa el mismo proceso Python y los mismos extractores openWakeWord en macOS
+Apple Silicon y Raspberry Pi ARM64.
 
 Vosk procesa continuamente el PCM de 16 kHz en el satélite. Whisper sólo recibe audio durante los 7 segundos posteriores a la detección. Si se dice “asistente”, se hace una pausa y luego se dice la orden, la ventana permanece abierta y la segunda frase se acepta como comando.
 

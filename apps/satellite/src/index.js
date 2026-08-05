@@ -5,12 +5,16 @@ import { dirname } from "node:path";
 import { createEvent, EventType, isEvent } from "@ha/contracts";
 import { configPath, env, jsonLog, readReleaseVersion } from "@ha/shared";
 import { createAudioDeviceProvider, listAudioDevices } from "./audio/index.js";
-import { VoiceCapture } from "./voice/voice-capture.js";
+import { pcmToWav, VoiceCapture } from "./voice/voice-capture.js";
 import { VoskWakeWordDetector } from "./voice/vosk-wake-word-detector.js";
+import { OpenWakeWordDetector } from "./voice/openwakeword-detector.js";
+import { WakeWordModelManager } from "./voice/wake-word-model-manager.js";
 import { OneShotCommandRetry, WakeActivationGate } from "./voice/wake-activation-gate.js";
 import { createTextToSpeechProvider } from "./tts/index.js";
 import {
   normalizeConnectedPowerDeviceId,
+  normalizeAssistantName,
+  normalizeWakeWordSelection,
   readAssistantConfig,
   validateAssistantNameWithVosk,
   writeAssistantConfig
@@ -30,6 +34,7 @@ const audioApiPort = Number(env("AUDIO_API_PORT", "3200"));
 const audioConfigPath = env("AUDIO_CONFIG_PATH", configPath("/etc/ha/satellite/audio.json", "dev/satellite/config/audio.json"));
 const assistantConfigPath = env("ASSISTANT_CONFIG_PATH", configPath("/etc/ha/satellite/assistant.json", "dev/satellite/config/assistant.json"));
 const satelliteServerConfigPath = env("SERVER_CONFIG_PATH", configPath("/etc/ha/satellite/server.json", "dev/satellite/config/server.json"));
+const wakeWordModelsPath = env("WAKE_WORD_MODELS_PATH", configPath("/var/lib/ha/models/wake-word", "dev/satellite/models/wake-word"));
 const defaultAudioConfig = { inputDeviceIds: [], inputDeviceNames: {}, inputChannelsByDevice: {}, outputDeviceIds: [], outputDeviceNames: {}, ttsVoiceId: null, musicPlayerEnabled: true, musicOutputDeviceId: null };
 const audioConfigKeys = Object.keys(defaultAudioConfig).sort();
 const audioDeviceProvider = createAudioDeviceProvider();
@@ -40,15 +45,27 @@ const sendspinPlayer = new SendspinPlayer({
   serverUrl: env("MUSIC_ASSISTANT_SENDSPIN_URL", ""),
   log: jsonLog
 });
-const wakeWordProvider = env("WAKE_WORD_PROVIDER", "vosk");
 const commandWindowMs = Number(env("WAKE_WORD_COMMAND_TIMEOUT_MS", "7000"));
 const wakeWordExactMinConfidence = Number(env("WAKE_WORD_EXACT_MIN_CONFIDENCE", "0.72"));
 const wakeWordEmbeddedMinConfidence = Number(env("WAKE_WORD_EMBEDDED_MIN_CONFIDENCE", "0.90"));
 const serverReconnectDelayMs = Number(env("SERVER_RECONNECT_DELAY_MS", "10000"));
+const wakeWordModelRefreshMs = Math.max(10_000, Number(env("WAKE_WORD_MODEL_REFRESH_MS", "60000")) || 60_000);
+const postTtsWakeWordGuardMs = Math.max(0, Number(env("WAKE_WORD_POST_TTS_GUARD_MS", "1500")) || 0);
 const voskOptions = {
   python: env("VOSK_PYTHON", "dev/satellite/.venv/bin/python"),
   scriptPath: env("VOSK_SCRIPT_PATH", "apps/satellite/src/voice/vosk_detector.py"),
   modelPath: env("VOSK_MODEL_PATH", "dev/satellite/models/vosk-model-small-es-0.42")
+};
+const openWakeWordOptions = {
+  python: env("OPENWAKEWORD_PYTHON", voskOptions.python),
+  scriptPath: env("OPENWAKEWORD_SCRIPT_PATH", configPath(
+    "/opt/ha/current/apps/satellite/src/voice/openwakeword_detector.py",
+    "apps/satellite/src/voice/openwakeword_detector.py"
+  )),
+  threshold: Number(env("OPENWAKEWORD_THRESHOLD", "0.995")),
+  patience: Number(env("OPENWAKEWORD_PATIENCE", "2")),
+  minimumAudioDb: Number(env("OPENWAKEWORD_MIN_AUDIO_DB", "-55")),
+  audioActivityWindowMs: Number(env("OPENWAKEWORD_AUDIO_ACTIVITY_WINDOW_MS", "1000"))
 };
 let activeSocket = null;
 let activeServer = null;
@@ -57,7 +74,15 @@ let connectionGeneration = 0;
 let activationExpiresAt = 0;
 let wakeWordDetector = null;
 let wakeWordOnlyPending = false;
+let pendingWakeAnnouncement = null;
+let reportableFalseDetection = null;
+let falseDetectionReportPending = false;
+let wakeWordModelRefreshPending = false;
+let pendingPositiveDetection = null;
+let manualTrainingRecording = null;
+let manualTrainingSessionActive = false;
 let voiceCapture = null;
+let microphoneMonitoringVisible = true;
 const wakeActivation = new WakeActivationGate();
 const commandRetry = new OneShotCommandRetry();
 const outputVolumeDucker = new OutputVolumeDucker({
@@ -66,6 +91,11 @@ const outputVolumeDucker = new OutputVolumeDucker({
   log: jsonLog
 });
 let assistantConfig = await readAssistantConfig(assistantConfigPath, jsonLog);
+const wakeWordModels = new WakeWordModelManager({
+  rootPath: wakeWordModelsPath,
+  serverProvider: () => activeServer,
+  log: jsonLog
+});
 function sendspinConfig(config) {
   return { ...config, registrationName: assistantConfig.name };
 }
@@ -85,7 +115,54 @@ function sendListeningEnded(reason) {
   }
 }
 
-function createWakeWordDetector(name) {
+function announceWakeListening() {
+  const pending = pendingWakeAnnouncement;
+  if (!pending) return;
+  pendingWakeAnnouncement = null;
+  void outputVolumeDucker.duck();
+  const payload = {
+    wakeWord: pending.name,
+    timeoutMs: commandWindowMs,
+    manual: false,
+    reportableFalseDetection: Boolean(reportableFalseDetection)
+  };
+  publishLocalEvent(EventType.WAKE_WORD_DETECTED, payload);
+  if (activeSocket?.readyState === WebSocket.OPEN) {
+    activeSocket.send(JSON.stringify(createEvent(EventType.WAKE_WORD_DETECTED, payload, satellite.id)));
+  }
+  jsonLog("info", "Wake word completada; escucha de comando iniciada", {
+    provider: pending.provider,
+    timeoutMs: commandWindowMs
+  });
+}
+
+function handleWakeWordDetection(name, detection, provider) {
+  if (manualTrainingSessionActive) {
+    jsonLog("info", "Wake word ignorada durante la pantalla de entrenamiento manual", { provider });
+    return;
+  }
+  const { audio, ...details } = detection;
+  if (!wakeActivation.beginListening()) {
+    jsonLog("info", "Wake word ignorada porque la sesión de voz sigue activa", { phase: wakeActivation.phase, ...details });
+    return;
+  }
+  reportableFalseDetection = provider === "model"
+    && assistantConfig.wakeWordTrainingMode === true
+    && Buffer.isBuffer(audio)
+    ? { modelId: assistantConfig.wakeWordModelId, audio }
+    : null;
+  // La detección del modelo puede ocurrir antes de que termine la wake word.
+  // Primero descartamos la frase acústica completa; el display pasa a verde
+  // recién cuando comienza una ventana de comando limpia.
+  wakeWordOnlyPending = true;
+  pendingWakeAnnouncement = { name, provider };
+  commandRetry.reset();
+  activationExpiresAt = Date.now() + commandWindowMs;
+  voiceCapture?.arm(commandWindowMs, { bridgeAfterCurrentPhrase: true });
+  jsonLog("info", "Wake word detectada; esperando que termine antes de escuchar el comando", { provider, ...details });
+}
+
+function createVoskWakeWordDetector(name) {
   return new VoskWakeWordDetector({
     ...voskOptions,
     wakeWord: name,
@@ -93,36 +170,68 @@ function createWakeWordDetector(name) {
     exactMinConfidence: wakeWordExactMinConfidence,
     embeddedMinConfidence: wakeWordEmbeddedMinConfidence,
     log: jsonLog,
-    onDetected: (detection) => {
-      if (!wakeActivation.beginListening()) {
-        jsonLog("info", "Wake word ignorada porque la sesión de voz sigue activa", { phase: wakeActivation.phase, ...detection });
-        return;
-      }
-      const normalizeWords = (value) => String(value || "").normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase().trim();
-      wakeWordOnlyPending = normalizeWords(detection.text) === normalizeWords(name);
-      commandRetry.reset();
-      activationExpiresAt = Date.now() + commandWindowMs;
-      voiceCapture?.arm(commandWindowMs, { bridgeCurrentPhrase: wakeWordOnlyPending });
-      void outputVolumeDucker.duck();
-      jsonLog("info", "Wake word detectada por Vosk", detection);
-      publishLocalEvent(EventType.WAKE_WORD_DETECTED, { wakeWord: name, timeoutMs: commandWindowMs, manual: false });
-      if (activeSocket?.readyState === WebSocket.OPEN) {
-        activeSocket.send(JSON.stringify(createEvent(EventType.WAKE_WORD_DETECTED, { wakeWord: name, timeoutMs: commandWindowMs, manual: false }, satellite.id)));
-      }
-    }
+    onDetected: (detection) => handleWakeWordDetection(name, detection, "vosk")
   });
 }
 
-async function replaceWakeWordDetector(name) {
-  if (wakeWordProvider !== "vosk") return;
-  const replacement = createWakeWordDetector(name);
+async function createConfiguredWakeWordDetector(config) {
+  if (config.wakeWordMode === "model") {
+    const files = await wakeWordModels.ensureCurrent(config.wakeWordModelId, { allowCached: true });
+    const detector = new OpenWakeWordDetector({
+      ...openWakeWordOptions,
+      ...files,
+      wakeWord: files.metadata.wakeWord || config.name,
+      cooldownMs: Number(env("WAKE_WORD_COOLDOWN_MS", "2000")),
+      log: jsonLog,
+      onDetected: (detection) => handleWakeWordDetection(files.metadata.wakeWord || config.name, detection, "model")
+    });
+    detector.modelSha256 = files.metadata.file.sha256;
+    detector.modelModifiedAt = files.metadata.file.modifiedAt;
+    return detector;
+  }
+  return createVoskWakeWordDetector(config.name);
+}
+
+async function refreshActiveWakeWordModel() {
+  if (wakeWordModelRefreshPending
+    || assistantConfig.wakeWordMode !== "model"
+    || !assistantConfig.wakeWordEnabled
+    || wakeActivation.phase !== "idle") return;
+  wakeWordModelRefreshPending = true;
+  try {
+    const remote = await wakeWordModels.remoteModel(assistantConfig.wakeWordModelId);
+    if (wakeWordDetector?.modelSha256 === remote.file.sha256
+      && wakeWordDetector?.modelModifiedAt === remote.file.modifiedAt) return;
+    await wakeWordModels.download(assistantConfig.wakeWordModelId, remote);
+    await replaceWakeWordDetector(assistantConfig);
+    jsonLog("info", "Modelo wake word activo actualizado automáticamente", {
+      modelId: assistantConfig.wakeWordModelId,
+      sha256: wakeWordDetector.modelSha256,
+      modifiedAt: wakeWordDetector.modelModifiedAt
+    });
+  } catch (error) {
+    jsonLog("warn", "No se pudo revisar la actualización del modelo wake word", {
+      modelId: assistantConfig.wakeWordModelId,
+      error: error.message
+    });
+  } finally {
+    wakeWordModelRefreshPending = false;
+  }
+}
+
+async function replaceWakeWordDetector(config) {
+  const replacement = await createConfiguredWakeWordDetector(config);
   await replacement.start();
   const previous = wakeWordDetector;
   wakeWordDetector = replacement;
   activationExpiresAt = 0;
   wakeActivation.end();
   previous?.stop();
-  jsonLog("info", "Detector Vosk iniciado", { wakeWord: name });
+  jsonLog("info", "Detector de wake word iniciado", {
+    mode: config.wakeWordMode,
+    wakeWord: config.name,
+    modelId: config.wakeWordModelId
+  });
 }
 
 function stopWakeWordDetector() {
@@ -207,6 +316,17 @@ async function readJsonBody(request) {
   return JSON.parse(body);
 }
 
+async function readBinaryBody(request, maximumBytes = 10_000_000) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of request) {
+    size += chunk.length;
+    if (size > maximumBytes) throw new Error("La grabación supera el tamaño máximo permitido");
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
+
 async function handleAudioApi(request, response) {
   if (request.method === "OPTIONS") return sendJson(response, 204, {});
   const url = new URL(request.url, "http://localhost");
@@ -241,7 +361,125 @@ async function handleAudioApi(request, response) {
   }
 
   if (request.method === "GET" && url.pathname === "/assistant") {
-    return sendJson(response, 200, { config: assistantConfig, provider: wakeWordProvider });
+    return sendJson(response, 200, { config: assistantConfig, provider: assistantConfig.wakeWordMode });
+  }
+
+  if (request.method === "GET" && url.pathname === "/assistant/wake-word-models") {
+    try {
+      return sendJson(response, 200, {
+        models: await wakeWordModels.catalog(),
+        selectedModelId: assistantConfig.wakeWordModelId
+      });
+    } catch (error) {
+      return sendJson(response, 503, {
+        error: "wake_word_catalog_unavailable",
+        message: error.message,
+        models: []
+      });
+    }
+  }
+
+  const wakeWordDownloadMatch = /^\/assistant\/wake-word-models\/([a-z0-9][a-z0-9-]{0,63})\/download$/.exec(url.pathname);
+  if (request.method === "POST" && wakeWordDownloadMatch) {
+    try {
+      const metadata = await wakeWordModels.download(wakeWordDownloadMatch[1]);
+      if (assistantConfig.wakeWordEnabled
+        && assistantConfig.wakeWordMode === "model"
+        && assistantConfig.wakeWordModelId === wakeWordDownloadMatch[1]) {
+        await replaceWakeWordDetector(assistantConfig);
+      }
+      return sendJson(response, 200, { metadata });
+    } catch (error) {
+      return sendJson(response, 422, { error: "wake_word_download_failed", message: error.message });
+    }
+  }
+
+  if (request.method === "POST" && url.pathname === "/assistant/wake-word-training/session/start") {
+    if (wakeActivation.active) {
+      return sendJson(response, 409, { error: "voice_session_active", message: "Espera a que termine la interacción de voz actual." });
+    }
+    manualTrainingSessionActive = true;
+    stopWakeWordDetector();
+    voiceCapture.start();
+    return sendJson(response, 200, { active: true });
+  }
+
+  if (request.method === "POST" && url.pathname === "/assistant/wake-word-training/session/stop") {
+    manualTrainingRecording = null;
+    manualTrainingSessionActive = false;
+    if (assistantConfig.wakeWordEnabled) {
+      try {
+        await replaceWakeWordDetector(assistantConfig);
+      } catch (error) {
+        jsonLog("warn", "No se pudo reactivar el detector al salir del entrenamiento manual", { error: error.message });
+        return sendJson(response, 503, { error: "wake_word_restart_failed", message: error.message });
+      }
+    }
+    stopCaptureWhenAutomaticWakeIsDisabled();
+    return sendJson(response, 200, { active: false });
+  }
+
+  if (request.method === "POST" && url.pathname === "/assistant/wake-word-training/recordings/start") {
+    if (!manualTrainingSessionActive) {
+      return sendJson(response, 409, { error: "training_session_inactive", message: "Abre primero la pantalla de entrenamiento manual." });
+    }
+    if (manualTrainingRecording) {
+      return sendJson(response, 409, { error: "training_recording_active", message: "Ya hay una grabación en curso." });
+    }
+    if (wakeActivation.active) {
+      return sendJson(response, 409, { error: "voice_session_active", message: "Espera a que termine la interacción de voz actual." });
+    }
+    manualTrainingRecording = { chunks: [], bytes: 0, startedAt: Date.now() };
+    voiceCapture.start();
+    return sendJson(response, 202, { recording: true, maximumSeconds: 12 });
+  }
+
+  if (request.method === "POST" && url.pathname === "/assistant/wake-word-training/recordings/stop") {
+    const recording = manualTrainingRecording;
+    manualTrainingRecording = null;
+    stopCaptureWhenAutomaticWakeIsDisabled();
+    if (!recording || recording.bytes < 3_200) {
+      return sendJson(response, 422, { error: "training_recording_empty", message: "La grabación es demasiado corta." });
+    }
+    const wav = pcmToWav(Buffer.concat(recording.chunks, recording.bytes));
+    response.writeHead(200, {
+      "Access-Control-Allow-Origin": "*",
+      "Content-Type": "audio/wav",
+      "Content-Length": wav.length,
+      "X-Recording-Duration-Ms": String(Math.round(recording.bytes / 32))
+    });
+    return response.end(wav);
+  }
+
+  const trainingSampleMatch = /^\/assistant\/wake-word-training\/samples\/(positive|negative)$/.exec(url.pathname);
+  if (request.method === "POST" && trainingSampleMatch) {
+    try {
+      if (assistantConfig.wakeWordMode !== "model" || !assistantConfig.wakeWordModelId) {
+        throw new Error("Selecciona y guarda primero un modelo entrenado.");
+      }
+      const audio = await readBinaryBody(request);
+      const kind = trainingSampleMatch[1];
+      const result = await wakeWordModels.addSample(
+        assistantConfig.wakeWordModelId,
+        kind,
+        audio,
+        `manual-${kind}-${satellite.id}-${new Date().toISOString().replace(/[:.]/g, "-")}.wav`
+      );
+      return sendJson(response, 201, result);
+    } catch (error) {
+      return sendJson(response, 422, { error: "training_sample_failed", message: error.message });
+    }
+  }
+
+  if (request.method === "POST" && url.pathname === "/assistant/wake-word-training/train") {
+    try {
+      if (assistantConfig.wakeWordMode !== "model" || !assistantConfig.wakeWordModelId) {
+        throw new Error("Selecciona y guarda primero un modelo entrenado.");
+      }
+      return sendJson(response, 202, await wakeWordModels.train(assistantConfig.wakeWordModelId));
+    } catch (error) {
+      return sendJson(response, 422, { error: "training_start_failed", message: error.message });
+    }
   }
 
   if (request.method === "PUT" && url.pathname === "/assistant") {
@@ -250,19 +488,25 @@ async function handleAudioApi(request, response) {
       if ("wakeWordEnabled" in update && typeof update.wakeWordEnabled !== "boolean") {
         throw new Error("wakeWordEnabled debe ser booleano");
       }
-      const name = wakeWordProvider === "vosk"
+      if ("wakeWordTrainingMode" in update && typeof update.wakeWordTrainingMode !== "boolean") {
+        throw new Error("wakeWordTrainingMode debe ser booleano");
+      }
+      const selection = normalizeWakeWordSelection(update.wakeWordMode, update.wakeWordModelId);
+      const name = selection.wakeWordMode === "vosk"
         ? await validateAssistantNameWithVosk(update.name, voskOptions)
-        : update.name;
+        : normalizeAssistantName((await wakeWordModels.remoteModel(selection.wakeWordModelId)).wakeWord);
       const nextConfig = {
         name,
         wakeWordEnabled: update.wakeWordEnabled !== false,
+        ...selection,
+        wakeWordTrainingMode: selection.wakeWordMode === "model" && update.wakeWordTrainingMode === true,
         connectedPowerDeviceId: normalizeConnectedPowerDeviceId(update.connectedPowerDeviceId)
       };
       await applyWakeWordConfiguration(nextConfig);
       assistantConfig = nextConfig;
       await writeAssistantConfig(assistantConfigPath, assistantConfig);
       jsonLog("info", "Configuración del asistente actualizada", assistantConfig);
-      return sendJson(response, 200, { config: assistantConfig, provider: wakeWordProvider });
+      return sendJson(response, 200, { config: assistantConfig, provider: assistantConfig.wakeWordMode });
     } catch (error) {
       jsonLog("warn", "Nombre del asistente rechazado", { error: error.message });
       return sendJson(response, 422, { error: "invalid_assistant_name", message: error.message });
@@ -277,6 +521,47 @@ async function handleAudioApi(request, response) {
     } catch (error) {
       jsonLog("warn", "No se pudo iniciar la escucha manual", { error: error.message });
       return sendJson(response, 422, { error: "manual_listening_unavailable", message: error.message });
+    }
+  }
+
+  if (request.method === "POST" && url.pathname === "/voice/report-false-detection") {
+    if (falseDetectionReportPending) {
+      return sendJson(response, 409, { error: "false_detection_report_pending", message: "Ya se está enviando la detección falsa." });
+    }
+    if (wakeActivation.phase !== "listening" || !reportableFalseDetection) {
+      return sendJson(response, 409, {
+        error: "false_detection_unavailable",
+        message: "La escucha actual no fue iniciada por un modelo entrenado o ya finalizó."
+      });
+    }
+    const report = reportableFalseDetection;
+    falseDetectionReportPending = true;
+    try {
+      await wakeWordModels.addNegativeSample(
+        report.modelId,
+        report.audio,
+        `false-detection-${satellite.id}-${new Date().toISOString().replace(/[:.]/g, "-")}.wav`
+      );
+      activationExpiresAt = 0;
+      wakeWordOnlyPending = false;
+      pendingWakeAnnouncement = null;
+      reportableFalseDetection = null;
+      commandRetry.clear();
+      voiceCapture.disarm();
+      wakeActivation.end();
+      await outputVolumeDucker.restore();
+      sendListeningEnded("false_detection_reported");
+      stopCaptureWhenAutomaticWakeIsDisabled();
+      jsonLog("info", "Detección falsa reportada como muestra negativa", {
+        modelId: report.modelId,
+        audioBytes: report.audio.length
+      });
+      return sendJson(response, 201, { reported: true, modelId: report.modelId });
+    } catch (error) {
+      jsonLog("warn", "No se pudo reportar la detección falsa", { modelId: report.modelId, error: error.message });
+      return sendJson(response, 502, { error: "false_detection_report_failed", message: error.message });
+    } finally {
+      falseDetectionReportPending = false;
     }
   }
 
@@ -388,6 +673,9 @@ const localApiServer = createServer((request, response) => {
 const localEvents = new WebSocketServer({ server: localApiServer, path: "/events" });
 localEvents.on("connection", (socket) => {
   jsonLog("info", "Display conectado a eventos locales");
+  socket.send(JSON.stringify(createEvent(EventType.MICROPHONE_MONITORING_CHANGED, {
+    visible: microphoneMonitoringVisible
+  }, satellite.id)));
   socket.on("error", (error) => jsonLog("warn", "Error en WebSocket local", { error: error.message }));
 });
 function publishLocalEvent(type, payload) {
@@ -397,8 +685,14 @@ function publishLocalEvent(type, payload) {
   }
 }
 
+function setMicrophoneMonitoringVisible(visible) {
+  if (microphoneMonitoringVisible === visible) return;
+  microphoneMonitoringVisible = visible;
+  publishLocalEvent(EventType.MICROPHONE_MONITORING_CHANGED, { visible });
+}
+
 function stopCaptureWhenAutomaticWakeIsDisabled() {
-  if (!assistantConfig.wakeWordEnabled && wakeActivation.phase === "idle") {
+  if (!assistantConfig.wakeWordEnabled && !manualTrainingSessionActive && wakeActivation.phase === "idle") {
     voiceCapture?.stop();
     publishLocalEvent(EventType.AUDIO_LEVEL_UPDATED, { db: -60, level: 0, clipping: false });
     jsonLog("info", "Captura continua detenida porque la wake word está desactivada");
@@ -406,8 +700,8 @@ function stopCaptureWhenAutomaticWakeIsDisabled() {
 }
 
 async function applyWakeWordConfiguration(config) {
-  if (config.wakeWordEnabled && wakeWordProvider === "vosk") {
-    await replaceWakeWordDetector(config.name);
+  if (config.wakeWordEnabled) {
+    await replaceWakeWordDetector(config);
     voiceCapture?.start();
     return;
   }
@@ -418,7 +712,9 @@ async function applyWakeWordConfiguration(config) {
 async function startManualListening() {
   if (!wakeActivation.beginListening()) return false;
   const bridgeCurrentPhrase = voiceCapture?.running === true;
+  reportableFalseDetection = null;
   wakeWordOnlyPending = false;
+  pendingWakeAnnouncement = null;
   commandRetry.clear();
   activationExpiresAt = Date.now() + commandWindowMs;
   voiceCapture.arm(commandWindowMs, { bridgeCurrentPhrase });
@@ -446,10 +742,26 @@ voiceCapture = new VoiceCapture({
   commandSpeechStartMarginDb: Number(env("VOICE_COMMAND_SPEECH_START_MARGIN_DB", "6")),
   commandMinimumSpeechMs: Number(env("VOICE_COMMAND_MINIMUM_SPEECH_MS", "100")),
   preRollMs: Number(env("VOICE_COMMAND_PRE_ROLL_MS", "400")),
-  onCommandWindowStarted: (timeoutMs) => { activationExpiresAt = Date.now() + timeoutMs; },
-  onAudio: (audio) => { if (!wakeActivation.active) wakeWordDetector?.write(audio); },
+  onCommandWindowStarted: (timeoutMs) => {
+    activationExpiresAt = Date.now() + timeoutMs;
+    announceWakeListening();
+  },
+  onAudio: (audio) => {
+    if (manualTrainingRecording) {
+      const maximumBytes = 12 * 32_000;
+      const remaining = maximumBytes - manualTrainingRecording.bytes;
+      if (remaining > 0) {
+        const chunk = audio.subarray(0, remaining);
+        manualTrainingRecording.chunks.push(Buffer.from(chunk));
+        manualTrainingRecording.bytes += chunk.length;
+      }
+      return;
+    }
+    if (!wakeActivation.active) wakeWordDetector?.write(audio);
+  },
   onListeningTimeout: async () => {
     wakeWordOnlyPending = false;
+    pendingWakeAnnouncement = null;
     commandRetry.clear();
     wakeActivation.end();
     await outputVolumeDucker.restore();
@@ -460,6 +772,7 @@ voiceCapture = new VoiceCapture({
   onCaptureError: async () => {
     if (activationExpiresAt || wakeActivation.active) {
       wakeWordOnlyPending = false;
+      pendingWakeAnnouncement = null;
       commandRetry.clear();
       activationExpiresAt = 0;
       wakeActivation.end();
@@ -472,6 +785,7 @@ voiceCapture = new VoiceCapture({
     publishLocalEvent(EventType.AUDIO_LEVEL_UPDATED, level);
   },
   onPhrase: async (audio, { commandWasArmed = false, bridgedCommand = false } = {}) => {
+    if (manualTrainingRecording) return;
     // Sin detector local no existe fallback remoto: nunca enviamos audio
     // ambiental al servidor. Toda solicitud STT nace de una sesión local armada.
     const locallyActivated = wakeActivation.active && (commandWasArmed || Date.now() <= activationExpiresAt);
@@ -479,9 +793,10 @@ voiceCapture = new VoiceCapture({
     if (wakeWordOnlyPending && !bridgedCommand) {
       wakeWordOnlyPending = false;
       commandRetry.consume();
-      const remainingMs = Math.max(500, activationExpiresAt - Date.now());
-      voiceCapture.arm(remainingMs);
-      jsonLog("info", "Wake word aislada; capturando el comando localmente sin esperar STT", { timeoutMs: remainingMs });
+      activationExpiresAt = Date.now() + commandWindowMs;
+      voiceCapture.arm(commandWindowMs);
+      announceWakeListening();
+      jsonLog("info", "Frase de wake word descartada; iniciando ventana completa para el comando", { timeoutMs: commandWindowMs });
       return;
     }
     const activationWasWakeWordOnly = wakeWordOnlyPending;
@@ -491,7 +806,14 @@ voiceCapture = new VoiceCapture({
     // una frase ni ser extendida por ruido mientras la solicitud está en curso.
     activationExpiresAt = 0;
     wakeWordOnlyPending = false;
+    pendingWakeAnnouncement = null;
     sendListeningEnded("captured");
+    setMicrophoneMonitoringVisible(false);
+    const trainingDetection = reportableFalseDetection && assistantConfig.wakeWordTrainingMode === true
+      ? reportableFalseDetection
+      : null;
+    const activationId = trainingDetection ? crypto.randomUUID() : null;
+    pendingPositiveDetection = trainingDetection ? { ...trainingDetection, activationId } : null;
     try {
       if (!activeServer) throw new Error("No hay un servidor del asistente seleccionado y disponible");
       const response = await fetch(activeServer.speechToTextUrl, {
@@ -500,18 +822,22 @@ voiceCapture = new VoiceCapture({
           "Content-Type": "audio/wav",
           "X-Satellite-Id": satellite.id,
           "X-Assistant-Name": assistantConfig.name,
-          "X-Connected-Power-Device-Id": assistantConfig.connectedPowerDeviceId || ""
+          "X-Connected-Power-Device-Id": assistantConfig.connectedPowerDeviceId || "",
+          "X-Voice-Activation-Id": activationId || ""
         },
         body: audio
       });
       if (!response.ok) throw new Error(`STT respondió HTTP ${response.status}: ${(await response.text()).slice(0, 300)}`);
       const result = await response.json();
+      if (!result.accepted && pendingPositiveDetection?.activationId === activationId) pendingPositiveDetection = null;
+      if (result.accepted) reportableFalseDetection = null;
       if (result.awaitingCommand) {
         if (commandRetry.consume()) {
           await outputVolumeDucker.duck();
           activationExpiresAt = Date.now() + commandWindowMs;
           wakeActivation.keepListening();
           voiceCapture.arm(commandWindowMs);
+          setMicrophoneMonitoringVisible(true);
           if (activeSocket?.readyState === WebSocket.OPEN) {
             activeSocket.send(JSON.stringify(createEvent(EventType.FOLLOW_UP_LISTENING_STARTED, {
               timeoutMs: commandWindowMs,
@@ -524,6 +850,7 @@ voiceCapture = new VoiceCapture({
           activationExpiresAt = 0;
           wakeActivation.end();
           voiceCapture.disarm();
+          setMicrophoneMonitoringVisible(true);
           sendListeningEnded("no_command");
           jsonLog("info", "Sesión terminada después de una frase adicional sin comando");
           stopCaptureWhenAutomaticWakeIsDisabled();
@@ -536,13 +863,18 @@ voiceCapture = new VoiceCapture({
       if (!result.awaitingCommand) {
         if (activationWasWakeWordOnly) await outputVolumeDucker.restore();
         commandRetry.clear();
-        wakeActivation.end();
-        stopCaptureWhenAutomaticWakeIsDisabled();
+        if (!result.accepted) {
+          wakeActivation.end();
+          setMicrophoneMonitoringVisible(true);
+          stopCaptureWhenAutomaticWakeIsDisabled();
+        }
       }
     } catch (error) {
+      if (pendingPositiveDetection?.activationId === activationId) pendingPositiveDetection = null;
       await outputVolumeDucker.restore().catch(() => {});
       commandRetry.clear();
       wakeActivation.end();
+      setMicrophoneMonitoringVisible(true);
       stopCaptureWhenAutomaticWakeIsDisabled();
       throw error;
     }
@@ -552,13 +884,23 @@ voiceCapture = new VoiceCapture({
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 let speechQueue = Promise.resolve();
 
+async function finishProcessingWithoutSpeech() {
+  if (wakeActivation.phase !== "processing") return;
+  await wakeWordDetector?.reset?.();
+  wakeActivation.end();
+  setMicrophoneMonitoringVisible(true);
+  stopCaptureWhenAutomaticWakeIsDisabled();
+  jsonLog("info", "Detector reactivado después de una respuesta sin TTS");
+}
+
 async function cancelListeningForSpeech() {
   const wasListening = activationExpiresAt > 0 || wakeActivation.phase === "listening";
   activationExpiresAt = 0;
   wakeWordOnlyPending = false;
+  pendingWakeAnnouncement = null;
   commandRetry.clear();
   voiceCapture.disarm();
-  wakeActivation.end();
+  if (wakeActivation.phase === "listening") wakeActivation.end();
   if (!wasListening) return;
   await outputVolumeDucker.restore().catch((error) => {
     jsonLog("warn", "No se pudo restaurar el volumen al interrumpir la escucha", { error: error.message });
@@ -583,14 +925,17 @@ function openFollowUpWindow(timeoutMs) {
 
 function enqueueSpeech(text, { expectsReply = false, followUpTimeoutMs = 5000 } = {}) {
   speechQueue = speechQueue.then(async () => {
+    setMicrophoneMonitoringVisible(false);
     await cancelListeningForSpeech();
-    wakeActivation.beginListening();
+    if (wakeActivation.phase === "idle") wakeActivation.beginListening();
     wakeActivation.beginProcessing();
     const config = await resolvedAudioConfig();
     if (!config.outputDeviceId) {
       jsonLog("info", "Respuesta TTS omitida: no hay salida configurada");
+      await wakeWordDetector?.reset?.();
       wakeActivation.end();
       if (expectsReply) openFollowUpWindow(followUpTimeoutMs);
+      setMicrophoneMonitoringVisible(true);
       return;
     }
     const voices = await textToSpeechProvider.listVoices();
@@ -602,16 +947,29 @@ function enqueueSpeech(text, { expectsReply = false, followUpTimeoutMs = 5000 } 
       jsonLog("info", "Respuesta TTS reproducida", { provider: textToSpeechProvider.name, voiceId });
     } finally {
       await delay(200);
-      voiceCapture.resume();
-      wakeActivation.end();
-      if (expectsReply) openFollowUpWindow(followUpTimeoutMs);
+      await wakeWordDetector?.reset?.();
+      if (expectsReply) {
+        voiceCapture.resume();
+        openFollowUpWindow(followUpTimeoutMs);
+      } else {
+        if (postTtsWakeWordGuardMs) {
+          jsonLog("info", "Guarda post-TTS antes de reactivar wake word", { timeoutMs: postTtsWakeWordGuardMs });
+          await delay(postTtsWakeWordGuardMs);
+        }
+        voiceCapture.resume();
+        wakeActivation.end();
+        stopCaptureWhenAutomaticWakeIsDisabled();
+      }
+      setMicrophoneMonitoringVisible(true);
     }
   }).catch((error) => {
+    setMicrophoneMonitoringVisible(true);
     wakeActivation.end();
     jsonLog("warn", "No se pudo reproducir la respuesta TTS", { error: error.message });
   });
 }
 
+await serverSelection.start();
 const initialAudioConfig = await readAudioConfig();
 const initialEffectiveAudioConfig = await resolvedAudioConfig(initialAudioConfig);
 const initialVoices = await textToSpeechProvider.listVoices().catch(() => []);
@@ -629,13 +987,16 @@ try {
   stopWakeWordDetector();
   voiceCapture.stop();
   assistantConfig = { ...assistantConfig, wakeWordEnabled: false };
-  jsonLog("warn", "No se pudo iniciar Vosk; la activación manual continúa disponible", { error: error.message });
+  jsonLog("warn", "No se pudo iniciar el detector automático; la activación manual continúa disponible", { error: error.message });
 }
 await sendspinPlayer.start(sendspinConfig(initialAudioConfig)).catch((error) => jsonLog("warn", "El parlante Sendspin no pudo iniciarse automáticamente", { error: error.message }));
+const wakeWordModelRefresh = setInterval(() => void refreshActiveWakeWordModel(), wakeWordModelRefreshMs);
+wakeWordModelRefresh.unref();
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.once(signal, () => {
     void outputVolumeDucker.restore();
     clearTimeout(reconnectTimer);
+    clearInterval(wakeWordModelRefresh);
     serverSelection.stop();
     activeSocket?.close();
     voiceCapture.stop();
@@ -683,6 +1044,35 @@ function connect(server, generation = connectionGeneration) {
       const event = JSON.parse(data.toString());
       if (!isEvent(event)) throw new Error("Evento incompatible con el protocolo actual");
       jsonLog("info", "Evento para el satélite", { type: event.type, source: event.source });
+      if (event.type === EventType.ASSISTANT_RESPONSE
+        && event.payload.targetSatelliteId === satellite.id
+        && event.payload.activationId
+        && pendingPositiveDetection?.activationId === event.payload.activationId) {
+        const positive = pendingPositiveDetection;
+        pendingPositiveDetection = null;
+        if (event.payload.commandProcessed === true) {
+          void wakeWordModels.addPositiveSample(
+            positive.modelId,
+            positive.audio,
+            `accepted-detection-${satellite.id}-${new Date().toISOString().replace(/[:.]/g, "-")}.wav`
+          ).then(() => jsonLog("info", "Activación confirmada enviada como muestra positiva", {
+            modelId: positive.modelId,
+            audioBytes: positive.audio.length
+          })).catch((error) => jsonLog("warn", "No se pudo enviar la activación positiva", {
+            modelId: positive.modelId,
+            error: error.message
+          }));
+        } else {
+          jsonLog("info", "Activación no guardada: el comando no pudo procesarse correctamente", {
+            modelId: positive.modelId
+          });
+        }
+      }
+      if (event.type === EventType.ASSISTANT_RESPONSE
+        && event.payload.targetSatelliteId === satellite.id
+        && event.payload.speechRequested === false) {
+        void finishProcessingWithoutSpeech();
+      }
       if (event.type === EventType.ASSISTANT_SPEECH_REQUESTED
         && event.payload.targetSatelliteId === satellite.id
         && typeof event.payload.text === "string"
@@ -712,5 +1102,3 @@ function connect(server, generation = connectionGeneration) {
   }, 15000);
   socket.on("close", () => clearInterval(heartbeat));
 }
-
-await serverSelection.start();

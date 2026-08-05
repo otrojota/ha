@@ -4,7 +4,27 @@ import { dirname } from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
-const defaultConfig = { name: "Asistente", wakeWordEnabled: true, connectedPowerDeviceId: null };
+const defaultConfig = {
+  name: "Asistente",
+  wakeWordEnabled: true,
+  wakeWordMode: "vosk",
+  wakeWordModelId: null,
+  wakeWordTrainingMode: false,
+  connectedPowerDeviceId: null
+};
+
+export function normalizeWakeWordSelection(mode, modelId) {
+  const normalizedMode = mode == null ? "vosk" : String(mode).trim();
+  if (!["vosk", "model"].includes(normalizedMode)) {
+    throw new Error("El método de activación debe ser Vosk o un modelo entrenado");
+  }
+  if (normalizedMode === "vosk") return { wakeWordMode: "vosk", wakeWordModelId: null };
+  const normalizedId = String(modelId || "").trim().toLowerCase();
+  if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(normalizedId)) {
+    throw new Error("Selecciona un modelo de wake word válido");
+  }
+  return { wakeWordMode: "model", wakeWordModelId: normalizedId };
+}
 
 export function normalizeConnectedPowerDeviceId(value) {
   if (value == null || value === "") return null;
@@ -25,9 +45,12 @@ export function normalizeAssistantName(value) {
 export async function readAssistantConfig(path, log) {
   try {
     const stored = JSON.parse(await readFile(path, "utf8"));
+    const wakeWordSelection = normalizeWakeWordSelection(stored.wakeWordMode, stored.wakeWordModelId);
     return {
       name: normalizeAssistantName(stored.name),
       wakeWordEnabled: stored.wakeWordEnabled !== false,
+      ...wakeWordSelection,
+      wakeWordTrainingMode: wakeWordSelection.wakeWordMode === "model" && stored.wakeWordTrainingMode === true,
       connectedPowerDeviceId: normalizeConnectedPowerDeviceId(stored.connectedPowerDeviceId)
     };
   } catch (error) {

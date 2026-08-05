@@ -300,6 +300,100 @@ test("una acción futura de Home Assistant no puede degradarse a un recordatorio
   ]);
 });
 
+test("no declara inexistente luz uno sin consultar Home Assistant", async () => {
+  let turn = 0;
+  const calls = [];
+  const client = { async chat(messages) {
+    turn += 1;
+    if (turn === 1) return { message: { role: "assistant", content: "No encontré una luz llamada luz uno." } };
+    if (turn === 2) {
+      assert.match(messages.at(-1).content, /requiere light_turn_off/);
+      return { message: toolCall("light_turn_off", { target: "luz uno" }) };
+    }
+    return { message: { role: "assistant", content: "Apagué la luz 1." } };
+  } };
+  const tools = {
+    definitions: () => [{ function: { name: "home_list_devices" } }],
+    async execute(name, args) {
+      calls.push({ name, args });
+      return { affected: ["Luz 1"] };
+    }
+  };
+
+  const answer = await new AssistantAgent({ client, tools, log: () => {} })
+    .respond("Apaga la luz uno.", { satelliteId: "memo" });
+
+  assert.deepEqual(calls, [{ name: "light_turn_off", args: { target: "luz uno" } }]);
+  assert.equal(answer, "Apagué la luz 1.");
+});
+
+test("rechaza home_set_power para una luz y conserva rondas para confirmar la acción correcta", async () => {
+  let turn = 0;
+  const calls = [];
+  const client = { async chat(messages) {
+    turn += 1;
+    if (turn === 1) return { message: toolCall("home_list_devices", {}) };
+    if (turn === 2) return { message: toolCall("home_set_power", {
+      target: "light.luz_escritorio_1", on: true
+    }) };
+    if (turn === 3) {
+      assert.match(messages.at(-1).content, /requiere light_turn_on; no ejecutes home_set_power/);
+      return { message: toolCall("light_turn_on", { target: "luz uno" }) };
+    }
+    return { message: { role: "assistant", content: "Encendí la luz 1." } };
+  } };
+  const tools = {
+    definitions: () => [{ function: { name: "home_list_devices" } }],
+    async execute(name, args) {
+      calls.push({ name, args });
+      if (name === "home_list_devices") return { devices: [{ id: "light.luz_escritorio_1", name: "Luz 1" }] };
+      return { affected: ["Luz 1"] };
+    }
+  };
+
+  const answer = await new AssistantAgent({ client, tools, log: () => {} })
+    .respond("Enciende la luz uno.", { satelliteId: "memo" });
+
+  assert.deepEqual(calls, [
+    { name: "home_list_devices", args: {} },
+    { name: "light_turn_on", args: { target: "luz uno" } }
+  ]);
+  assert.equal(answer, "Encendí la luz 1.");
+});
+
+test("apaga Pantallita no fuerza además el apagado de una luz reciente", async () => {
+  let turn = 0;
+  const calls = [];
+  const client = { async chat() {
+    turn += 1;
+    return { message: turn === 1
+      ? toolCall("home_set_power", { target: "switch.enchufe_pantallita", on: false })
+      : { role: "assistant", content: "Apagué Pantallita." } };
+  } };
+  const tools = {
+    definitions: () => [{ function: { name: "home_list_devices" } }],
+    async execute(name, args) {
+      calls.push({ name, args });
+      return { affected: ["Pantallita"] };
+    }
+  };
+
+  const answer = await new AssistantAgent({ client, tools, log: () => {} })
+    .respond("Apaga Pantallita.", {
+      satelliteId: "memo",
+      history: [
+        { role: "user", content: "Enciende la luz uno." },
+        { role: "assistant", content: "Encendí la luz uno." }
+      ]
+    });
+
+  assert.deepEqual(calls, [{
+    name: "home_set_power",
+    args: { target: "switch.enchufe_pantallita", on: false }
+  }]);
+  assert.equal(answer, "Apagué Pantallita.");
+});
+
 test("apágate controla exclusivamente el enchufe asociado al satélite", async () => {
   let turn = 0;
   const calls = [];

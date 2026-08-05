@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Modelos de activación</title>
+  <link rel="stylesheet" href="/wake-word/app.css">
+</head>
+<body>
+  <header class="hero">
+    <div>
+      <p class="eyebrow">Asistente doméstico · Servidor</p>
+      <h1>Modelos de activación</h1>
+      <p class="intro">Crea, entrena y reemplaza el archivo vigente de cada wake word. Los satélites podrán detectar cambios mediante su fecha de modificación.</p>
+    </div>
+    <button id="new-model" class="primary">Agregar modelo</button>
+  </header>
+
+  <main>
+    <section class="summary" aria-label="Resumen">
+      <article><strong id="model-count">0</strong><span>modelos</span></article>
+      <article><strong id="ready-count">0</strong><span>listos para descargar</span></article>
+      <article><strong id="job-count">0</strong><span>entrenamientos activos</span></article>
+    </section>
+
+    <div id="notice" class="notice hidden" role="status"></div>
+    <section id="empty" class="empty hidden">
+      <div class="empty-icon">◎</div>
+      <h2>Todavía no hay modelos</h2>
+      <p>Agrega el primero y carga un ONNX existente o incorpora muestras para entrenarlo.</p>
+    </section>
+    <section id="model-list" class="model-grid" aria-live="polite"></section>
+  </main>
+
+  <dialog id="model-dialog">
+    <form id="model-form" method="dialog">
+      <div class="dialog-heading">
+        <div><p class="eyebrow">Nuevo detector</p><h2>Agregar modelo</h2></div>
+        <button type="button" class="icon-button" data-close aria-label="Cerrar">×</button>
+      </div>
+      <label>Identificador <input name="id" required pattern="[a-z0-9][a-z0-9-]{0,63}" placeholder="memo"></label>
+      <label>Nombre <input name="name" required maxlength="80" placeholder="Memo"></label>
+      <label>Wake word <input name="wakeWord" required maxlength="80" placeholder="Memo"></label>
+      <label>Descripción <textarea name="description" maxlength="500" rows="3" placeholder="Modelo general para los satélites de la casa"></textarea></label>
+      <div id="model-form-status" class="form-status hidden" role="status" aria-live="polite"></div>
+      <div class="dialog-actions">
+        <button type="button" class="secondary" data-close>Cancelar</button>
+        <button id="create-model-button" class="primary" type="submit">
+          <span class="button-spinner" aria-hidden="true"></span>
+          <span class="button-label">Crear modelo</span>
+        </button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="detail-dialog" class="detail-dialog">
+    <div id="detail-content"></div>
+  </dialog>
+
+  <script type="module" src="/wake-word/app.js"></script>
+</body>
+</html>

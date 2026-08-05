@@ -21,7 +21,7 @@
         </header>
         <div class="home-content row g-4 my-auto">
           <div class="col-md-6"><article class="panel playback-panel p-4 h-100"><div class="playback-cover-wrap"><img id="playback-cover" class="playback-cover" alt="Portada de la reproducción actual"><div id="playback-cover-placeholder" class="playback-cover-placeholder" aria-hidden="true">♫</div></div><div class="playback-info"><div class="text-secondary">Reproducción actual</div><h2 id="track">Sin reproducción</h2><div id="playback-artists" class="playback-artists"></div><div id="playback-album" class="playback-album"></div><div id="device" class="playback-device">Dispositivo: --</div><div class="playback-progress" aria-label="Progreso"><div id="playback-progress-bar"></div></div><div id="playback-time" class="playback-time"></div><div class="playback-volume"><span aria-hidden="true">🔈</span><input id="playback-volume" type="range" min="0" max="100" step="1" value="50" aria-label="Volumen del destino activo" disabled><output id="playback-volume-value" for="playback-volume">--</output></div><div class="playback-controls" aria-label="Controles de reproducción"><button id="playback-previous" class="playback-control" type="button" aria-label="Canción anterior">◀▮</button><button id="playback-toggle" class="playback-control primary" type="button" aria-label="Reproducir" disabled>▶</button><button id="playback-next" class="playback-control" type="button" aria-label="Siguiente canción">▮▶</button></div><div id="playback-controls-status" class="playback-controls-status" role="status" aria-live="polite"></div></div></article></div>
-          <div class="col-md-6"><article id="conversation-panel" class="panel conversation-panel p-4 h-100"><div class="conversation-heading"><div class="text-secondary">Conversación</div><div id="listening-indicator" class="listening-indicator" role="status" aria-live="assertive" aria-hidden="true"><span class="listening-mic" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Zm6-3a6 6 0 0 1-12 0M12 18v3m-3 0h6"/></svg></span><span id="listening-label">Te escucho</span></div></div><p id="transcript" class="fs-5">Esperando voz…</p><p id="response" class="fs-3" role="status" aria-live="polite">Hola, estoy listo.</p><div class="audio-meter" aria-label="Nivel del micrófono"><div class="audio-meter-header"><span>Micrófono</span><span id="audio-level-db">−60 dB</span></div><div class="audio-meter-track"><div id="audio-level-bar" class="audio-meter-bar"></div><div id="audio-level-peak" class="audio-meter-peak"></div></div></div></article></div>
+          <div class="col-md-6"><article id="conversation-panel" class="panel conversation-panel p-4 h-100"><div class="conversation-heading"><div class="text-secondary">Conversación</div><div class="listening-actions"><button id="report-false-detection" class="false-detection-button" type="button" hidden>Reportar detección falsa</button><div id="listening-indicator" class="listening-indicator" role="status" aria-live="assertive" aria-hidden="true"><span class="listening-mic" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a6 6 0 0 1-12 0M12 18v3m-3 0h6"/></svg></span><span id="listening-label">Te escucho</span></div></div></div><p id="transcript" class="fs-5">Esperando voz…</p><p id="response" class="fs-3" role="status" aria-live="polite">Hola, estoy listo.</p><div class="audio-meter" aria-label="Nivel del micrófono"><div class="audio-meter-header"><span>Micrófono</span><span id="audio-level-db">−60 dB</span></div><div class="audio-meter-track"><div id="audio-level-bar" class="audio-meter-bar"></div><div id="audio-level-peak" class="audio-meter-peak"></div></div></div></article></div>
         </div>
       </section>
 
@@ -95,7 +95,7 @@
 
       <section id="assistant-screen" class="screen">
         <header class="screen-header"><button class="back-button" data-screen="settings-screen">‹</button><div><div class="eyebrow">Asistente</div><h1>Nombre y activación</h1></div></header>
-        <p class="text-secondary fs-5">Este nombre será también la palabra que activa al asistente. Debe existir en el vocabulario español.</p>
+        <p class="text-secondary fs-5">Con Vosk, el nombre debe existir en el vocabulario español. Al seleccionar un modelo entrenado se usará automáticamente la frase definida por ese modelo.</p>
         <form id="assistant-form" class="assistant-form">
           <label for="assistant-name" class="form-label fs-5">Nombre o frase de activación</label>
           <input id="assistant-name" class="assistant-name-input" name="name" type="text" minlength="2" maxlength="40" autocomplete="off" required>
@@ -103,9 +103,48 @@
           <input id="connected-power-device" name="connectedPowerDeviceId" type="hidden">
           <button id="connected-power-device-open" class="selection-trigger" type="button"><span><strong id="connected-power-device-label">Ninguno</strong><small>Seleccionar enchufe asociado</small></span><span class="chevron">›</span></button>
           <label class="switch-row"><span><strong>Activación por nombre</strong><small>Escucha continuamente la palabra de activación. Desactívala para ahorrar CPU y memoria; el botón de micrófono seguirá disponible.</small></span><input id="wake-word-enabled" type="checkbox" role="switch" checked></label>
+          <div id="wake-word-method-fields" class="wake-word-method-fields">
+            <label for="wake-word-method" class="form-label fs-5">Método de detección</label>
+            <select id="wake-word-method" class="assistant-name-input">
+              <option value="vosk">Vosk — método actual</option>
+            </select>
+            <label class="switch-row"><span><strong>Modo entrenamiento</strong><small>Envía activaciones confirmadas y detecciones falsas al servidor para mejorar automáticamente este modelo.</small></span><input id="wake-word-training-mode" type="checkbox" role="switch"></label>
+            <div id="wake-word-model-status" class="status-message" role="status"></div>
+            <button id="wake-word-model-update" class="save-button secondary" type="button" hidden>Descargar actualización</button>
+            <button id="wake-word-training-open" class="selection-trigger" type="button"><span><strong>Agregar muestras manualmente</strong><small>Grabar positivos y negativos, revisar el audio y solicitar entrenamiento</small></span><span class="chevron">›</span></button>
+          </div>
           <button class="save-button" type="submit">Validar y guardar</button>
         </form>
         <div id="assistant-status" class="status-message mt-3" role="status"></div>
+      </section>
+
+      <section id="wake-word-training-screen" class="screen">
+        <header class="screen-header"><button id="training-back" class="back-button" type="button">‹</button><div><div class="eyebrow">Modelo de activación</div><h1>Entrenamiento manual</h1></div></header>
+        <p class="text-secondary fs-5">Las muestras se graban con el micrófono configurado en este satélite. Puedes escucharlas y confirmarlas antes de enviarlas; este flujo es independiente del modo de aprendizaje automático.</p>
+        <div class="training-panel">
+          <div class="audio-meter training-audio-meter" aria-label="Nivel del micrófono">
+            <div class="audio-meter-header"><span>Volumen del micrófono</span><span id="training-audio-level-db">−60 dB</span></div>
+            <div class="audio-meter-track"><div id="training-audio-level-bar" class="audio-meter-bar"></div><div id="training-audio-level-peak" class="audio-meter-peak"></div></div>
+          </div>
+          <div class="training-record-actions">
+            <button id="training-record-positive" class="save-button" type="button">Grabar positiva</button>
+            <button id="training-record-negative" class="save-button secondary" type="button">Grabar negativa</button>
+          </div>
+          <button id="training-record-stop" class="save-button danger" type="button" hidden>Detener grabación</button>
+          <div id="training-review" class="training-review" hidden>
+            <strong id="training-review-title">Revisar grabación</strong>
+            <audio id="training-review-audio" controls></audio>
+            <p>¿Quieres enviar esta muestra al servidor?</p>
+            <div class="training-record-actions">
+              <button id="training-sample-send" class="save-button" type="button">Sí, enviar</button>
+              <button id="training-sample-discard" class="save-button secondary" type="button">Descartar</button>
+            </div>
+          </div>
+          <div id="training-status" class="status-message" role="status"></div>
+          <hr class="settings-divider">
+          <p class="text-secondary">El entrenamiento se ejecutará en el servidor con todas las muestras almacenadas para el modelo seleccionado.</p>
+          <button id="training-force" class="save-button" type="button">Forzar entrenamiento ahora</button>
+        </div>
       </section>
 
       <section id="audio-screen" class="screen">

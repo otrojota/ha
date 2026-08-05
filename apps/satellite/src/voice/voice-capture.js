@@ -124,6 +124,7 @@ export class VoiceCapture {
     this.commandExpiresAt = 0;
     this.commandWindowMs = 0;
     this.bridgeCurrentPhrase = false;
+    this.bridgeAfterCurrentPhrase = false;
     this.commandSpeechStartMarginDb = commandSpeechStartMarginDb;
     this.commandMinimumSpeechMs = commandMinimumSpeechMs;
     this.preRollBytes = Math.max(0, Math.round(preRollMs * PCM_BYTES_PER_MILLISECOND));
@@ -163,16 +164,18 @@ export class VoiceCapture {
     if (this.running) this.paused = false;
   }
 
-  arm(commandWindowMs, { bridgeCurrentPhrase = false } = {}) {
+  arm(commandWindowMs, { bridgeCurrentPhrase = false, bridgeAfterCurrentPhrase = false } = {}) {
     this.commandWindowMs = commandWindowMs;
     this.commandExpiresAt = Date.now() + commandWindowMs;
     this.bridgeCurrentPhrase = bridgeCurrentPhrase;
+    this.bridgeAfterCurrentPhrase = bridgeAfterCurrentPhrase;
   }
 
   disarm() {
     this.commandWindowMs = 0;
     this.commandExpiresAt = 0;
     this.bridgeCurrentPhrase = false;
+    this.bridgeAfterCurrentPhrase = false;
   }
 
   async loop(generation) {
@@ -242,6 +245,24 @@ export class VoiceCapture {
     let stopRequested = false;
     let forceStopTimeout = null;
     let boundaryDecisionTimeout = null;
+    const beginCommandInCurrentStream = () => {
+      bridgedCommand = true;
+      this.bridgeCurrentPhrase = false;
+      this.bridgeAfterCurrentPhrase = false;
+      commandBoundaryByte = totalPcmBytes;
+      activeDetector = new AdaptiveVoiceActivityDetector({
+        initialNoiseFloorDb: this.activityDetector.noiseFloorDb,
+        startMarginDb: this.commandSpeechStartMarginDb,
+        endMarginDb: this.activityDetector.endMarginDb,
+        minimumSpeechMs: this.commandMinimumSpeechMs,
+        silenceDurationMs: this.activityDetector.silenceDurationMs,
+        calibrationFrames: 1
+      });
+      this.commandExpiresAt = Date.now() + this.commandWindowMs;
+      this.onCommandWindowStarted(this.commandWindowMs);
+      clearTimeout(boundaryDecisionTimeout);
+      boundaryDecisionTimeout = null;
+    };
     const requestStop = () => {
       if (stopRequested || child.exitCode !== null || child.signalCode !== null) return;
       stopRequested = true;
@@ -286,21 +307,9 @@ export class VoiceCapture {
         const db = rms > 0 ? Math.max(-60, 20 * Math.log10(rms)) : -60;
         const durationMs = sampleCount / 16;
         if (this.commandExpiresAt > 0 && this.bridgeCurrentPhrase && !bridgedCommand) {
-          bridgedCommand = true;
-          this.bridgeCurrentPhrase = false;
-          commandBoundaryByte = totalPcmBytes;
-          activeDetector = new AdaptiveVoiceActivityDetector({
-            initialNoiseFloorDb: this.activityDetector.noiseFloorDb,
-            startMarginDb: this.commandSpeechStartMarginDb,
-            endMarginDb: this.activityDetector.endMarginDb,
-            minimumSpeechMs: this.commandMinimumSpeechMs,
-            silenceDurationMs: this.activityDetector.silenceDurationMs,
-            calibrationFrames: 1
-          });
-          this.commandExpiresAt = Date.now() + this.commandWindowMs;
-          this.onCommandWindowStarted(this.commandWindowMs);
-          clearTimeout(boundaryDecisionTimeout);
-          boundaryDecisionTimeout = null;
+          beginCommandInCurrentStream();
+        } else if (this.commandExpiresAt > 0 && this.bridgeAfterCurrentPhrase && !bridgedCommand) {
+          activeDetector.silenceDurationMs = Math.min(activeDetector.silenceDurationMs, 250);
         }
         const activity = activeDetector.process(db, durationMs);
         speechStarted ||= activity.speechStarted;
@@ -315,25 +324,19 @@ export class VoiceCapture {
         sampleCount = 0;
         peak = 0;
         if (activity.phraseEnded) {
+          if (this.commandExpiresAt > 0 && this.bridgeAfterCurrentPhrase && !bridgedCommand) {
+            beginCommandInCurrentStream();
+            return;
+          }
           // Damos una ventana mínima al proceso Vosk para devolver su detección
           // final antes de cerrar ffmpeg. La comunicación entre procesos puede
           // llegar unas decenas de milisegundos después del mismo bloque de audio.
           if (!boundaryDecisionTimeout) boundaryDecisionTimeout = setTimeout(() => {
             boundaryDecisionTimeout = null;
-            if (this.commandExpiresAt > 0 && this.bridgeCurrentPhrase && !bridgedCommand) {
-              bridgedCommand = true;
-              this.bridgeCurrentPhrase = false;
-              commandBoundaryByte = totalPcmBytes;
-              activeDetector = new AdaptiveVoiceActivityDetector({
-                initialNoiseFloorDb: this.activityDetector.noiseFloorDb,
-                startMarginDb: this.commandSpeechStartMarginDb,
-                endMarginDb: this.activityDetector.endMarginDb,
-                minimumSpeechMs: this.commandMinimumSpeechMs,
-                silenceDurationMs: this.activityDetector.silenceDurationMs,
-                calibrationFrames: 1
-              });
-              this.commandExpiresAt = Date.now() + this.commandWindowMs;
-              this.onCommandWindowStarted(this.commandWindowMs);
+            if (this.commandExpiresAt > 0
+              && (this.bridgeCurrentPhrase || this.bridgeAfterCurrentPhrase)
+              && !bridgedCommand) {
+              beginCommandInCurrentStream();
               return;
             }
             phraseEnded = true;
@@ -363,10 +366,12 @@ export class VoiceCapture {
     if (bridgedCommand && commandTimedOut && !commandSpeechStarted) {
       this.commandExpiresAt = 0;
       this.bridgeCurrentPhrase = false;
+      this.bridgeAfterCurrentPhrase = false;
       return { audio: null, commandWasArmed: true, commandTimedOut: true };
     }
     if (speechStarted || commandTimedOut) this.commandExpiresAt = 0;
     this.bridgeCurrentPhrase = false;
+    this.bridgeAfterCurrentPhrase = false;
 
     try {
       const expectedInterrupt = exitSignal === "SIGINT" && (stopRequested || this.paused || !this.running);

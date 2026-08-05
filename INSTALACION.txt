@@ -122,6 +122,13 @@ muévelos fuera de `releases/dist` antes de ejecutar:
 
 El despliegue reinicia `ha-containers`, `ha-music-gateway` y `ha-server`.
 
+Los modelos wake word no se copian desde desarrollo durante una instalación.
+Cada servidor conserva sus propias muestras y modelos en
+`/var/lib/ha/wake-word`. Con el modo entrenamiento habilitado en un satélite,
+el servidor incorpora muestras reales, reentrena periódicamente y publica el
+ONNX resultante; los satélites que lo tengan activo lo actualizarán
+automáticamente.
+
 ## 6. Verificación posterior
 
 ### Cada satélite
@@ -155,6 +162,7 @@ ssh ha-server '
   systemctl is-active ha-containers ha-music-gateway ha-server
   curl -fsS http://127.0.0.1:3000/health
   curl -fsS http://127.0.0.1:3100/health
+  curl -fsS http://127.0.0.1:3000/api/wake-word/models
 '
 ```
 

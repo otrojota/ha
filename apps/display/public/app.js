@@ -5,7 +5,10 @@ const elements = Object.fromEntries([
   "input-summary", "output-summary", "audio-title", "audio-help", "audio-status", "device-list",
   "channel-status", "channel-list", "audio-level-db", "audio-level-bar", "audio-level-peak", "conversation-panel", "listening-indicator", "listening-label",
   "assistant-summary", "assistant-form", "assistant-name", "assistant-status", "connected-power-device", "connected-power-device-open", "connected-power-device-label"
-  , "wake-word-enabled", "manual-listen"
+  , "wake-word-enabled", "wake-word-method-fields", "wake-word-method", "wake-word-training-mode", "wake-word-model-status", "wake-word-model-update", "manual-listen", "report-false-detection"
+  , "wake-word-training-open", "training-audio-level-db", "training-audio-level-bar", "training-audio-level-peak",
+  "training-record-positive", "training-record-negative", "training-record-stop", "training-review", "training-review-title",
+  "training-review-audio", "training-sample-send", "training-sample-discard", "training-status", "training-force", "training-back"
   , "voice-summary", "voice-status", "voice-list"
   , "location-summary", "location-form", "location-city", "location-region", "location-country",
   "location-latitude", "location-longitude", "location-time-zone", "location-status", "detect-location"
@@ -66,6 +69,10 @@ let homeAssistantCredentialConfigured = false;
 let manualListenRequestPending = false;
 let connectedPowerOptions = [{ id: "", name: "Ninguno", description: "Sin enchufe asociado" }];
 let selectionReturnScreen = "settings-screen";
+let manualTrainingRecordingKind = null;
+let manualTrainingSample = null;
+let manualTrainingSampleUrl = null;
+let manualTrainingStopTimer = null;
 
 const llmProviderDefaults = {
   ollama: { baseUrl: "http://127.0.0.1:11434", model: "qwen3.5:9b" },
@@ -593,14 +600,200 @@ async function deleteLlmCredential() {
   }
 }
 
+let wakeWordModels = [];
+
+function formatDateTime(value) {
+  return value ? new Date(value).toLocaleString("es-CL", { dateStyle: "medium", timeStyle: "short" }) : "fecha desconocida";
+}
+
+function selectedWakeWordModelId() {
+  const value = elements["wake-word-method"].value;
+  return value.startsWith("model:") ? value.slice("model:".length) : null;
+}
+
+function renderWakeWordModelStatus() {
+  elements["wake-word-method-fields"].hidden = !elements["wake-word-enabled"].checked;
+  const modelId = selectedWakeWordModelId();
+  const model = wakeWordModels.find((item) => item.id === modelId);
+  elements["wake-word-training-mode"].disabled = !model;
+  elements["wake-word-training-open"].disabled = !model;
+  if (!model) elements["wake-word-training-mode"].checked = false;
+  elements["wake-word-model-update"].hidden = !model || (model.local?.downloaded && !model.updateAvailable);
+  if (!model) {
+    elements["wake-word-model-status"].textContent = modelId
+      ? "El modelo seleccionado ya no está disponible en el servidor."
+      : "Vosk reconoce el nombre configurado sin descargar un modelo.";
+    return;
+  }
+  if (!model.local) {
+    elements["wake-word-model-status"].textContent = `“${model.wakeWord}” · aún no descargado en este satélite.`;
+  } else if (model.updateAvailable) {
+    elements["wake-word-model-status"].textContent = `Hay una actualización disponible desde ${formatDateTime(model.file.modifiedAt)}.`;
+  } else {
+    elements["wake-word-model-status"].textContent = `Modelo descargado y vigente · ${formatDateTime(model.file.modifiedAt)}.`;
+  }
+}
+
+function renderWakeWordModels(selectedMode = "vosk", selectedModelId = null) {
+  const select = elements["wake-word-method"];
+  select.replaceChildren(new Option("Vosk — método actual", "vosk"));
+  for (const model of wakeWordModels) {
+    const suffix = model.updateAvailable ? " · actualización disponible" : model.local?.downloaded ? " · descargado" : "";
+    select.add(new Option(`${model.name} — “${model.wakeWord}”${suffix}`, `model:${model.id}`));
+  }
+  const value = selectedMode === "model" && selectedModelId ? `model:${selectedModelId}` : "vosk";
+  if (![...select.options].some((option) => option.value === value) && selectedModelId) {
+    select.add(new Option(`${selectedModelId} — no disponible`, value));
+  }
+  select.value = value;
+  renderWakeWordModelStatus();
+}
+
+async function loadWakeWordModels(config) {
+  elements["wake-word-model-status"].textContent = "Consultando modelos del servidor…";
+  try {
+    const response = await fetch(`${assistantApiUrl}/wake-word-models`, { cache: "no-store" });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.message || `HTTP ${response.status}`);
+    wakeWordModels = result.models || [];
+    renderWakeWordModels(config.wakeWordMode, config.wakeWordModelId);
+  } catch (error) {
+    wakeWordModels = [];
+    renderWakeWordModels(config.wakeWordMode, config.wakeWordModelId);
+    elements["wake-word-model-status"].textContent = `No se pudo consultar el catálogo: ${error.message}`;
+  }
+}
+
+async function downloadSelectedWakeWordModel() {
+  const modelId = selectedWakeWordModelId();
+  if (!modelId) return;
+  const button = elements["wake-word-model-update"];
+  button.disabled = true;
+  elements["wake-word-model-status"].textContent = "Descargando y verificando el modelo…";
+  try {
+    const response = await fetch(`${assistantApiUrl}/wake-word-models/${modelId}/download`, { method: "POST" });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.message || `HTTP ${response.status}`);
+    await loadWakeWordModels({ wakeWordMode: "model", wakeWordModelId: modelId });
+    elements["wake-word-model-status"].textContent = "Modelo actualizado y verificado correctamente.";
+  } catch (error) {
+    elements["wake-word-model-status"].textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function clearManualTrainingSample() {
+  if (manualTrainingSampleUrl) URL.revokeObjectURL(manualTrainingSampleUrl);
+  manualTrainingSample = null;
+  manualTrainingSampleUrl = null;
+  elements["training-review-audio"].removeAttribute("src");
+  elements["training-review"].hidden = true;
+}
+
+function setManualTrainingRecording(recording) {
+  elements["training-record-positive"].disabled = recording;
+  elements["training-record-negative"].disabled = recording;
+  elements["training-record-stop"].hidden = !recording;
+}
+
+async function startManualTrainingRecording(kind) {
+  clearManualTrainingSample();
+  elements["training-status"].textContent = "Preparando el micrófono…";
+  try {
+    const response = await fetch(`${assistantApiUrl}/wake-word-training/recordings/start`, { method: "POST" });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.message || `HTTP ${response.status}`);
+    manualTrainingRecordingKind = kind;
+    setManualTrainingRecording(true);
+    elements["training-status"].textContent = kind === "positive"
+      ? `Grabando muestra positiva: di “${elements["assistant-name"].value}”.`
+      : "Grabando muestra negativa: habla o reproduce un sonido que no debería activar el asistente.";
+    clearTimeout(manualTrainingStopTimer);
+    manualTrainingStopTimer = setTimeout(() => stopManualTrainingRecording(), 10_000);
+  } catch (error) {
+    elements["training-status"].textContent = error.message;
+  }
+}
+
+async function stopManualTrainingRecording() {
+  if (!manualTrainingRecordingKind) return;
+  clearTimeout(manualTrainingStopTimer);
+  elements["training-record-stop"].disabled = true;
+  elements["training-status"].textContent = "Preparando la grabación para revisión…";
+  try {
+    const response = await fetch(`${assistantApiUrl}/wake-word-training/recordings/stop`, { method: "POST" });
+    if (!response.ok) {
+      const result = await response.json();
+      throw new Error(result.message || `HTTP ${response.status}`);
+    }
+    manualTrainingSample = { kind: manualTrainingRecordingKind, blob: await response.blob() };
+    manualTrainingSampleUrl = URL.createObjectURL(manualTrainingSample.blob);
+    elements["training-review-audio"].src = manualTrainingSampleUrl;
+    elements["training-review-title"].textContent = manualTrainingSample.kind === "positive"
+      ? "Revisar muestra positiva"
+      : "Revisar muestra negativa";
+    elements["training-review"].hidden = false;
+    elements["training-status"].textContent = "Escucha la grabación y confirma si deseas enviarla.";
+  } catch (error) {
+    elements["training-status"].textContent = error.message;
+  } finally {
+    manualTrainingRecordingKind = null;
+    elements["training-record-stop"].disabled = false;
+    setManualTrainingRecording(false);
+  }
+}
+
+async function sendManualTrainingSample() {
+  if (!manualTrainingSample) return;
+  elements["training-sample-send"].disabled = true;
+  elements["training-status"].textContent = "Enviando muestra al servidor…";
+  try {
+    const response = await fetch(`${assistantApiUrl}/wake-word-training/samples/${manualTrainingSample.kind}`, {
+      method: "POST",
+      headers: { "Content-Type": "audio/wav" },
+      body: manualTrainingSample.blob
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.message || `HTTP ${response.status}`);
+    const label = manualTrainingSample.kind === "positive" ? "positiva" : "negativa";
+    clearManualTrainingSample();
+    elements["training-status"].textContent = `Muestra ${label} enviada correctamente.`;
+  } catch (error) {
+    elements["training-status"].textContent = error.message;
+  } finally {
+    elements["training-sample-send"].disabled = false;
+  }
+}
+
+async function forceWakeWordTraining() {
+  if (!confirm("¿Iniciar ahora el entrenamiento del modelo con las muestras almacenadas?")) return;
+  elements["training-force"].disabled = true;
+  elements["training-status"].textContent = "Solicitando entrenamiento al servidor…";
+  try {
+    const response = await fetch(`${assistantApiUrl}/wake-word-training/train`, { method: "POST" });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.message || `HTTP ${response.status}`);
+    elements["training-status"].textContent = "Entrenamiento iniciado. El satélite descargará automáticamente el modelo cuando esté disponible.";
+  } catch (error) {
+    elements["training-status"].textContent = error.message;
+  } finally {
+    elements["training-force"].disabled = false;
+  }
+}
+
 async function loadAssistantConfig() {
   try {
     const response = await fetch(assistantApiUrl);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const { config } = await response.json();
-    elements["assistant-summary"].textContent = `${config.name} · ${config.wakeWordEnabled !== false ? "activación automática" : "sólo botón"}`;
+    const method = config.wakeWordMode === "model" ? "modelo entrenado" : "Vosk";
+    const training = config.wakeWordTrainingMode === true ? " · entrenamiento" : "";
+    elements["assistant-summary"].textContent = `${config.name} · ${config.wakeWordEnabled !== false ? `${method}${training}` : "sólo botón"}`;
     elements["assistant-name"].value = config.name;
     elements["wake-word-enabled"].checked = config.wakeWordEnabled !== false;
+    elements["wake-word-training-mode"].checked = config.wakeWordTrainingMode === true;
+    await loadWakeWordModels(config);
     await loadConnectedPowerDevices(config.connectedPowerDeviceId);
     return true;
   } catch (error) {
@@ -640,7 +833,8 @@ async function saveAssistantName(event) {
   event.preventDefault();
   const button = elements["assistant-form"].querySelector("button[type=submit]");
   button.disabled = true;
-  elements["assistant-status"].textContent = "Validando con Vosk…";
+  const modelId = selectedWakeWordModelId();
+  elements["assistant-status"].textContent = modelId ? "Descargando y activando el modelo…" : "Validando con Vosk…";
   try {
     const response = await fetch(assistantApiUrl, {
       method: "PUT",
@@ -648,6 +842,9 @@ async function saveAssistantName(event) {
       body: JSON.stringify({
         name: elements["assistant-name"].value,
         wakeWordEnabled: elements["wake-word-enabled"].checked,
+        wakeWordMode: modelId ? "model" : "vosk",
+        wakeWordModelId: modelId,
+        wakeWordTrainingMode: modelId && elements["wake-word-training-mode"].checked,
         connectedPowerDeviceId: elements["connected-power-device"].value || null
       })
     });
@@ -655,9 +852,13 @@ async function saveAssistantName(event) {
     if (!response.ok) throw new Error(result.message || `HTTP ${response.status}`);
     elements["assistant-name"].value = result.config.name;
     elements["wake-word-enabled"].checked = result.config.wakeWordEnabled !== false;
+    elements["wake-word-training-mode"].checked = result.config.wakeWordTrainingMode === true;
+    await loadWakeWordModels(result.config);
     elements["connected-power-device"].value = result.config.connectedPowerDeviceId || "";
     renderConnectedPowerDeviceLabel();
-    elements["assistant-summary"].textContent = `${result.config.name} · ${result.config.wakeWordEnabled !== false ? "activación automática" : "sólo botón"}`;
+    const method = result.config.wakeWordMode === "model" ? "modelo entrenado" : "Vosk";
+    const training = result.config.wakeWordTrainingMode === true ? " · entrenamiento" : "";
+    elements["assistant-summary"].textContent = `${result.config.name} · ${result.config.wakeWordEnabled !== false ? `${method}${training}` : "sólo botón"}`;
     elements["assistant-status"].textContent = result.config.wakeWordEnabled
       ? `Configuración guardada. Di “${result.config.name}” o toca el micrófono.`
       : "Configuración guardada. La escucha continua está apagada; usa el botón de micrófono.";
@@ -851,15 +1052,47 @@ function updateAudioMeter({ level = 0, db = -60, clipping = false }) {
   elements["audio-level-peak"].style.left = `${peakAudioLevel * 100}%`;
   elements["audio-level-db"].textContent = `${Math.round(db)} dB`;
   elements["audio-level-bar"].closest(".audio-meter").classList.toggle("clipping", clipping);
+  elements["training-audio-level-bar"].style.width = `${displayedAudioLevel * 100}%`;
+  elements["training-audio-level-peak"].style.left = `${peakAudioLevel * 100}%`;
+  elements["training-audio-level-db"].textContent = `${Math.round(db)} dB`;
+  elements["training-audio-level-bar"].closest(".audio-meter").classList.toggle("clipping", clipping);
 }
 
-function setListeningIndicator(active, label = "Te escucho") {
+function setMicrophoneMeterVisible(visible) {
+  const meter = elements["audio-level-bar"].closest(".audio-meter");
+  meter.hidden = !visible;
+  meter.setAttribute("aria-hidden", String(!visible));
+  elements["manual-listen"].hidden = !visible;
+  elements["manual-listen"].setAttribute("aria-hidden", String(!visible));
+  if (!visible) updateAudioMeter({});
+}
+
+function setListeningIndicator(active, label = "Te escucho", { reportableFalseDetection = false } = {}) {
   elements["listening-label"].textContent = label;
   elements["listening-indicator"].classList.toggle("active", active);
   elements["listening-indicator"].setAttribute("aria-hidden", String(!active));
+  elements["report-false-detection"].hidden = !active || !reportableFalseDetection;
+  if (!active) elements["report-false-detection"].disabled = false;
   elements["conversation-panel"].classList.toggle("listening", active);
   elements["manual-listen"].classList.toggle("active", active);
   elements["manual-listen"].setAttribute("aria-pressed", String(active));
+}
+
+async function reportFalseDetection() {
+  const button = elements["report-false-detection"];
+  if (button.disabled) return;
+  button.disabled = true;
+  elements.transcript.textContent = "Enviando la detección falsa…";
+  try {
+    const response = await fetch(`${serverApiUrl}/voice/report-false-detection`, { method: "POST" });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.message || `HTTP ${response.status}`);
+    setListeningIndicator(false);
+    elements.transcript.textContent = "Detección falsa reportada para futuros entrenamientos.";
+  } catch (error) {
+    elements.transcript.textContent = `No se pudo reportar: ${error.message}`;
+    button.disabled = false;
+  }
 }
 
 async function startManualListening() {
@@ -1349,8 +1582,13 @@ function connectLocalEvents() {
       const event = JSON.parse(data);
       if (event.protocolVersion !== "2") return;
       if (event.type === "audio.level.updated") updateAudioMeter(event.payload);
+      if (event.type === "voice.microphone-monitoring.changed") {
+        setMicrophoneMeterVisible(event.payload.visible === true);
+      }
       if (event.type === "voice.wake-word.detected") {
-        setListeningIndicator(true, event.payload.manual ? "Te escucho" : "Te escucho");
+        setListeningIndicator(true, "Te escucho", {
+          reportableFalseDetection: event.payload.reportableFalseDetection === true
+        });
         elements.transcript.textContent = "Escuchando…";
       }
       if (event.type === "voice.listening.ended") setListeningIndicator(false);
@@ -1405,7 +1643,9 @@ async function connect(generation = displaySocketGeneration) {
     }
     if (event.type === "voice.wake-word.detected") {
       listeningGeneration += 1;
-      setListeningIndicator(true, "Te escucho");
+      setListeningIndicator(true, "Te escucho", {
+        reportableFalseDetection: event.payload.reportableFalseDetection === true
+      });
       elements.transcript.textContent = "Escuchando…";
     }
     if (event.type === "voice.listening.ended") {
@@ -1415,7 +1655,9 @@ async function connect(generation = displaySocketGeneration) {
         ? "Procesando tu solicitud…"
         : event.payload.reason === "timeout"
           ? "No escuché ningún comando."
-          : event.payload.reason === "interrupted_by_speech" ? "Esperando voz…" : "No pude entenderte.";
+          : event.payload.reason === "false_detection_reported"
+            ? "Detección falsa reportada para futuros entrenamientos."
+            : event.payload.reason === "interrupted_by_speech" ? "Esperando voz…" : "No pude entenderte.";
       setTimeout(() => {
         if (listeningGeneration === generation) elements.transcript.textContent = "Esperando voz…";
       }, 2500);
@@ -1480,6 +1722,49 @@ document.querySelectorAll("[data-screen]").forEach((button) => button.addEventLi
 elements["refresh-system-info"].addEventListener("click", loadSystemInformation);
 document.querySelectorAll("[data-audio-kind]").forEach((button) => button.addEventListener("click", () => openAudio(button.dataset.audioKind)));
 elements["assistant-form"].addEventListener("submit", saveAssistantName);
+elements["wake-word-enabled"].addEventListener("change", renderWakeWordModelStatus);
+elements["wake-word-method"].addEventListener("change", () => {
+  const model = wakeWordModels.find((item) => item.id === selectedWakeWordModelId());
+  if (model) elements["assistant-name"].value = model.wakeWord;
+  renderWakeWordModelStatus();
+});
+elements["wake-word-model-update"].addEventListener("click", downloadSelectedWakeWordModel);
+elements["wake-word-training-open"].addEventListener("click", async () => {
+  clearManualTrainingSample();
+  elements["training-status"].textContent = "Desactivando temporalmente la detección de la wake word…";
+  try {
+    const response = await fetch(`${assistantApiUrl}/wake-word-training/session/start`, { method: "POST" });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.message || `HTTP ${response.status}`);
+    elements["training-status"].textContent = "Detector suspendido mientras permanezcas en esta pantalla.";
+    showScreen("wake-word-training-screen");
+  } catch (error) {
+    elements["assistant-status"].textContent = error.message;
+  }
+});
+elements["training-record-positive"].addEventListener("click", () => startManualTrainingRecording("positive"));
+elements["training-record-negative"].addEventListener("click", () => startManualTrainingRecording("negative"));
+elements["training-record-stop"].addEventListener("click", stopManualTrainingRecording);
+elements["training-sample-send"].addEventListener("click", sendManualTrainingSample);
+elements["training-sample-discard"].addEventListener("click", () => {
+  clearManualTrainingSample();
+  elements["training-status"].textContent = "Grabación descartada; no se envió al servidor.";
+});
+elements["training-force"].addEventListener("click", forceWakeWordTraining);
+elements["training-back"].addEventListener("click", async () => {
+  if (manualTrainingRecordingKind) await stopManualTrainingRecording();
+  clearManualTrainingSample();
+  elements["training-status"].textContent = "Reactivando el detector de la wake word…";
+  try {
+    const response = await fetch(`${assistantApiUrl}/wake-word-training/session/stop`, { method: "POST" });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.message || `HTTP ${response.status}`);
+    showScreen("assistant-screen");
+    elements["assistant-status"].textContent = "Detector de la wake word reactivado.";
+  } catch (error) {
+    elements["training-status"].textContent = `No se pudo reactivar el detector: ${error.message}`;
+  }
+});
 elements["connected-power-device-open"].addEventListener("click", () => openSelectionScreen({
   title: "Enchufe asociado",
   help: "Selecciona el enchufe que alimenta este satélite.",
@@ -1492,6 +1777,7 @@ elements["connected-power-device-open"].addEventListener("click", () => openSele
   }
 }));
 elements["manual-listen"].addEventListener("click", startManualListening);
+elements["report-false-detection"].addEventListener("click", reportFalseDetection);
 elements["location-form"].addEventListener("submit", saveLocation);
 elements["detect-location"].addEventListener("click", detectLocation);
 elements["llm-provider-open"].addEventListener("click", () => openSelectionScreen({

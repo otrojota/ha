@@ -104,6 +104,12 @@ function shouldRejectMusicToolMismatch(requiredMusic, selectedTool, text) {
   return true;
 }
 
+function shouldRejectLightToolMismatch(requiredSideEffect, selectedTool) {
+  if (!requiredSideEffect?.startsWith("light_")) return false;
+  if (selectedTool === requiredSideEffect) return false;
+  return selectedTool === "home_set_power" || selectedTool?.startsWith("light_");
+}
+
 function explicitWebCurrentMusicLookup(text) {
   const normalized = String(text || "").normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase();
   return /\b(busca|buscar|consulta|consultar|investiga|investigar)\b/.test(normalized)
@@ -198,8 +204,12 @@ function requestedSideEffectTool(text, history = []) {
   if (/\b(alarma|temporizador|cuenta regresiva|avisame|recuerdame|despiertame)\b/.test(normalized)) {
     return /\b(cancela|elimina|borra|quita)\b/.test(normalized) ? "alarm_cancel" : "alarm_set";
   }
-  for (const name of ["light_turn_on", "light_turn_off", "light_set_brightness", "light_set_color", "light_set_color_temperature"]) {
-    if (lightActionRequested(name, normalized)) return name;
+  const identifiesLight = /\b(luz|luces|ampolleta|ampolletas|iluminacion)\b/.test(normalized)
+    || referencesRecentLight(text, history);
+  if (identifiesLight) {
+    for (const name of ["light_turn_on", "light_turn_off", "light_set_brightness", "light_set_color", "light_set_color_temperature"]) {
+      if (lightActionRequested(name, normalized)) return name;
+    }
   }
   return null;
 }
@@ -390,7 +400,7 @@ function claimsCompletedAction(content) {
 }
 
 export class AssistantAgent {
-  constructor({ client, tools, log, maxIterations = 4 }) {
+  constructor({ client, tools, log, maxIterations = 6 }) {
     this.client = client;
     this.tools = tools;
     this.log = log;
@@ -440,7 +450,9 @@ export class AssistantAgent {
       { role: "user", content: text }
     ];
     const executedTools = new Set();
+    const attemptedTools = new Set();
     const requiredAutomation = requiredAutomationTool(text);
+    const requiredSideEffect = requestedSideEffectTool(text, history);
     const connectedPowerOn = context.connectedPowerDeviceId ? connectedPowerIntent(text) : null;
     const connectedPowerScheduled = connectedPowerOn !== null && requiredAutomation === "automation_schedule";
     const automationAvailable = this.tools.definitions()
@@ -454,6 +466,13 @@ export class AssistantAgent {
 
       const calls = message.tool_calls || [];
       if (!calls.length) {
+        if (requiredSideEffect?.startsWith("light_") && !attemptedTools.has(requiredSideEffect)) {
+          messages.push({
+            role: "system",
+            content: `No consultaste Home Assistant. El comando actual requiere ${requiredSideEffect}; usa esa herramienta antes de afirmar que la luz existe, no existe o cambió de estado. Conserva el target indicado por el usuario.`
+          });
+          continue;
+        }
         if (connectedPowerOn !== null && !connectedPowerScheduled && !executedTools.has("home_set_power")) {
           messages.push({
             role: "system",
@@ -492,6 +511,7 @@ export class AssistantAgent {
       for (const call of calls) {
         const name = call.function?.name;
         const args = call.function?.arguments || {};
+        attemptedTools.add(name);
         this.log("info", "Ejecutando tool", { name, args });
         try {
           if (connectedPowerOn !== null && !connectedPowerScheduled && (name !== "home_set_power"
@@ -511,6 +531,9 @@ export class AssistantAgent {
           }
           if (requiredAutomation && name === "alarm_set") {
             throw new Error(`El comando actual requiere ${requiredAutomation}; alarm_set sólo crea un aviso y no ejecuta la acción futura`);
+          }
+          if (shouldRejectLightToolMismatch(requiredSideEffect, name)) {
+            throw new Error(`El comando actual requiere ${requiredSideEffect}; no ejecutes ${name}`);
           }
           const inferredMusic = requiredMusicTool(text, history);
           const requiredMusic = inferredMusic === "music_transfer_playback"

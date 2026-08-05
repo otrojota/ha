@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import { hostname } from "node:os";
+import { fileURLToPath } from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
 import { createEvent, EventType, isEvent, PROTOCOL_VERSION } from "@ha/contracts";
 import { configPath, env, jsonLog, readReleaseVersion } from "@ha/shared";
@@ -60,6 +61,9 @@ import { HomeAssistantRgbBulbGateway } from "./home-automation/home-assistant-rg
 import { HomeAssistantCatalog } from "./home-automation/home-assistant-catalog.js";
 import { ScheduledAutomationExecutor } from "./automations/scheduled-automation-executor.js";
 import { createScheduleAutomationTool } from "./tools/automation/schedule-automation.tool.js";
+import { WakeWordModelStore } from "./wake-word/wake-word-model-store.js";
+import { WakeWordTrainingService } from "./wake-word/wake-word-training-service.js";
+import { createWakeWordHttpHandler } from "./wake-word/wake-word-http.js";
 
 const port = Number(env("SERVER_PORT", "3000"));
 const serverVersion = await readReleaseVersion(
@@ -179,6 +183,18 @@ const speechToText = new WhisperCliSpeechToText({
   language: env("WHISPER_LANGUAGE", "es"),
   noGpu: env("WHISPER_NO_GPU", "false") === "true"
 });
+const wakeWordModelStore = new WakeWordModelStore({
+  rootPath: env("WAKE_WORD_MODELS_PATH", configPath("/var/lib/ha/wake-word", "dev/server/wake-word"))
+});
+await wakeWordModelStore.initialize();
+const defaultWakeWordTrainer = fileURLToPath(new URL("../wake-word-trainer/run.sh", import.meta.url));
+const wakeWordTraining = new WakeWordTrainingService({
+  store: wakeWordModelStore,
+  executable: env("WAKE_WORD_TRAINER_EXECUTABLE", defaultWakeWordTrainer),
+  log: jsonLog
+});
+wakeWordTraining.startAutomatic(Number(env("WAKE_WORD_AUTO_TRAIN_INTERVAL_MS", "600000")));
+const handleWakeWordRequest = createWakeWordHttpHandler({ store: wakeWordModelStore, training: wakeWordTraining });
 
 const server = createServer((request, response) => {
   response.setHeader("Access-Control-Allow-Origin", "*");
@@ -205,8 +221,16 @@ const server = createServer((request, response) => {
   if (request.method === "POST" && request.url === "/stt/transcribe") {
     return handleTranscription(request, response);
   }
-  response.statusCode = 404;
-  response.end(JSON.stringify({ error: "not_found" }));
+  void handleWakeWordRequest(request, response).then((handled) => {
+    if (handled !== false || response.writableEnded) return;
+    response.statusCode = 404;
+    response.end(JSON.stringify({ error: "not_found" }));
+  }).catch((error) => {
+    jsonLog("warn", "Error en administración de wake words", { error: error.message });
+    if (response.writableEnded) return;
+    response.statusCode = 500;
+    response.end(JSON.stringify({ error: "wake_word_server_error", message: error.message }));
+  });
 });
 
 async function readJsonRequest(request) {
@@ -366,9 +390,20 @@ function broadcast(event, sender) {
   }
 }
 
-function publishAssistantResponse(text, targetSatelliteId, { speak = true } = {}) {
+function publishAssistantResponse(text, targetSatelliteId, {
+  speak = true,
+  commandProcessed,
+  activationId = null
+} = {}) {
   const expectsReply = responseExpectsReply(text);
-  const responseEvent = createEvent(EventType.ASSISTANT_RESPONSE, { text, expectsReply, targetSatelliteId }, "server");
+  const responseEvent = createEvent(EventType.ASSISTANT_RESPONSE, {
+    text,
+    expectsReply,
+    targetSatelliteId,
+    speechRequested: speak,
+    ...(typeof commandProcessed === "boolean" ? { commandProcessed } : {}),
+    ...(activationId ? { activationId } : {})
+  }, "server");
   broadcast(responseEvent);
   if (!speak) return;
   broadcast(createEvent(EventType.ASSISTANT_SPEECH_REQUESTED, {
@@ -402,7 +437,10 @@ async function respondToCommand(text, source, context = {}) {
   if (isConversationResetCommand(text)) {
     conversationMemory.clear(source);
     const answer = "Listo, olvidé nuestra conversación. Empecemos de nuevo.";
-    publishAssistantResponse(answer, source);
+    publishAssistantResponse(answer, source, {
+      commandProcessed: true,
+      activationId: context.activationId
+    });
     jsonLog("info", "Memoria de conversación reiniciada", { source });
     return;
   }
@@ -421,12 +459,19 @@ async function respondToCommand(text, source, context = {}) {
     });
     const answer = removeGenericFollowUp(generatedAnswer) || "Listo.";
     conversationMemory.appendTurn(source, text, answer);
-    publishAssistantResponse(answer, source, { speak: !suppressSpeech });
+    publishAssistantResponse(answer, source, {
+      speak: !suppressSpeech,
+      commandProcessed: true,
+      activationId: context.activationId
+    });
     jsonLog("info", "Respuesta del asistente creada", { text: answer, source, speechSuppressed: suppressSpeech });
   } catch (error) {
     jsonLog("warn", "No se pudo interpretar el comando", { error: error.message, source });
     const text = "Lo siento, no pude procesar esa solicitud.";
-    publishAssistantResponse(text, source);
+    publishAssistantResponse(text, source, {
+      commandProcessed: false,
+      activationId: context.activationId
+    });
   }
 }
 
@@ -447,6 +492,8 @@ async function handleTranscription(request, response) {
     const transcript = await speechToText.transcribe(Buffer.concat(chunks));
     const assistantName = String(request.headers["x-assistant-name"] || defaultAssistantName).trim();
     const connectedPowerDeviceId = String(request.headers["x-connected-power-device-id"] || "").trim();
+    const activationId = String(request.headers["x-voice-activation-id"] || "").trim();
+    if (activationId && !/^[a-f0-9-]{36}$/i.test(activationId)) throw new Error("El identificador de activación es inválido");
     if (connectedPowerDeviceId && !/^switch\.[a-z0-9_]+$/.test(connectedPowerDeviceId)) {
       throw new Error("El enchufe conectado del satélite no es una entidad switch válida");
     }
@@ -461,7 +508,11 @@ async function handleTranscription(request, response) {
         assistantName,
         connectedPowerDeviceId: connectedPowerDeviceId || null
       }, source));
-      void respondToCommand(text, source, { assistantName, connectedPowerDeviceId: connectedPowerDeviceId || null });
+      void respondToCommand(text, source, {
+        assistantName,
+        connectedPowerDeviceId: connectedPowerDeviceId || null,
+        activationId: activationId || null
+      });
     }
     if (assistantNameOnly) {
       jsonLog("info", "Nombre aislado del asistente; esperando el comando siguiente", { transcript, assistantName, source });
@@ -527,6 +578,7 @@ server.listen(port, "0.0.0.0", () => {
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.once(signal, () => {
+    wakeWordTraining.stopAutomatic();
     serverAdvertiser.stop();
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 1000).unref();

@@ -13,7 +13,6 @@ check_service() {
 
 check_service ha-display.service
 check_service ha-satellite.service
-
 if pgrep -x cog >/dev/null 2>&1; then
   echo "OK  Cog/WPE Kiosk activo"
 else
