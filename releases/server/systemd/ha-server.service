@@ -1,8 +1,9 @@
 [Unit]
 Description=HA Voice Assistant Server
-After=network-online.target ha-music-gateway.service
+After=network-online.target ha-containers.service ha-music-gateway.service
 Wants=network-online.target
-Requires=ha-music-gateway.service
+Requires=ha-containers.service ha-music-gateway.service
+PropagatesStopTo=ha-music-gateway.service ha-containers.service
 
 [Service]
 Type=simple
@@ -10,6 +11,8 @@ User=ha
 Group=ha
 WorkingDirectory=/opt/ha/current
 EnvironmentFile=/etc/ha/server.env
+TimeoutStartSec=30min
+ExecStartPre=/opt/ha/current/apps/server/ensure-whisper-model.sh /var/lib/ha/models/whisper
 ExecStart=/usr/bin/node apps/server/src/index.js
 Restart=on-failure
 RestartSec=3

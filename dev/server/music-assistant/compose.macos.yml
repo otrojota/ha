@@ -1,0 +1,10 @@
+services:
+  music-assistant:
+    # Docker Desktop no publica network_mode: host hacia el host macOS.
+    # En desarrollo exponemos explícitamente la API, los streams y Sendspin.
+    # Fedora conserva la red host del compose base.
+    network_mode: bridge
+    ports:
+      - "8095:8095"
+      - "8097:8097"
+      - "8927:8927"

@@ -1,15 +1,16 @@
+import { BrowserAudioController } from "./audio/browser-audio-controller.js";
+import { createBrowserSatelliteId } from "./browser-identity.js";
+import { resolveMusicArtworkUrl } from "./music-artwork.js";
+
 const elements = Object.fromEntries([
   "clock", "date", "connection", "weather", "weather-icon", "weather-condition", "moon-phase", "moon-icon", "moon-phase-name", "track", "device", "transcript", "response",
   "playback-cover", "playback-cover-placeholder", "playback-artists", "playback-album", "playback-progress-bar", "playback-time",
   "playback-volume", "playback-volume-value", "playback-previous", "playback-toggle", "playback-next", "playback-controls-status",
   "input-summary", "output-summary", "audio-title", "audio-help", "audio-status", "device-list",
   "channel-status", "channel-list", "audio-level-db", "audio-level-bar", "audio-level-peak", "conversation-panel", "listening-indicator", "listening-label",
-  "assistant-summary", "assistant-form", "assistant-name", "assistant-status", "connected-power-device", "connected-power-device-open", "connected-power-device-label"
-  , "wake-word-enabled", "wake-word-method-fields", "wake-word-method", "wake-word-training-mode", "wake-word-model-status", "wake-word-model-update", "manual-listen", "report-false-detection"
-  , "wake-word-training-open", "training-audio-level-db", "training-audio-level-bar", "training-audio-level-peak",
-  "training-record-positive", "training-record-negative", "training-record-stop", "training-review", "training-review-title",
-  "training-review-audio", "training-sample-send", "training-sample-discard", "training-status", "training-force", "training-back"
-  , "voice-summary", "voice-status", "voice-list"
+  "assistant-summary", "assistant-form", "assistant-name", "assistant-status", "connected-power-device", "connected-power-device-open", "connected-power-device-label",
+  "wake-word-enabled", "manual-listen"
+  , "voice-summary", "voice-status", "voice-list", "voice-preview"
   , "location-summary", "location-form", "location-city", "location-region", "location-country",
   "location-latitude", "location-longitude", "location-time-zone", "location-status", "detect-location"
   , "llm-summary", "llm-form", "llm-provider", "llm-provider-open", "llm-provider-label", "llm-base-url-field", "llm-base-url", "llm-model",
@@ -18,9 +19,8 @@ const elements = Object.fromEntries([
   "llm-test", "llm-delete-credential", "llm-status"
   , "music-destinations-summary", "music-destinations-status", "music-destinations-list", "discover-music-destinations"
   , "music-sources-menu-summary", "music-sources-summary", "music-sources-status", "music-sources-list"
-  , "music-player-summary", "music-player-form", "music-player-output", "music-player-output-list", "music-player-enabled", "music-player-status"
   , "music-assistant-summary", "music-assistant-form", "music-assistant-username", "music-assistant-password", "music-assistant-status"
-  , "server-summary", "server-status", "server-list", "discover-servers"
+  , "server-summary"
   , "home-devices-summary", "home-devices-status", "home-devices-list"
   , "home-assistant-form", "home-assistant-url", "home-assistant-token", "home-assistant-credential-status",
   "home-assistant-test", "home-assistant-delete-credential", "home-assistant-status",
@@ -34,23 +34,22 @@ playbackSource.className = "playback-device";
 playbackSource.textContent = "Origen: --";
 elements["playback-album"].after(playbackSource);
 elements["playback-source"] = playbackSource;
-const audioApiUrl = `${location.protocol}//${location.hostname || "localhost"}:3200/audio`;
-const assistantApiUrl = `${location.protocol}//${location.hostname || "localhost"}:3200/assistant`;
-const serverApiUrl = `${location.protocol}//${location.hostname || "localhost"}:3200`;
-const systemApiUrl = `${serverApiUrl}/system`;
-const localEventsUrl = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.hostname || "localhost"}:3200/events`;
+const serverApiUrl = location.origin;
+const browserAudio = new BrowserAudioController();
+const SATELLITE_ID_STORAGE_KEY = "ha.browser-satellite.id.v1";
+const ASSISTANT_STORAGE_KEY = "ha.browser-satellite.assistant.v1";
 let locationApiUrl = null;
 let llmApiUrl = null;
 let homeApiUrl = null;
 let musicApiUrl = null;
+let voiceApiUrl = null;
 let localSatelliteId = null;
 let serverState = null;
 let displaySocket = null;
 let displaySocketGeneration = 0;
 let displayReconnectTimer = null;
-let localEventsSocket = null;
-let localEventsReconnectTimer = null;
 let audioState = null;
+let voiceState = null;
 let musicState = null;
 let activeAudioKind = "input";
 let displayedAudioLevel = 0;
@@ -69,10 +68,55 @@ let homeAssistantCredentialConfigured = false;
 let manualListenRequestPending = false;
 let connectedPowerOptions = [{ id: "", name: "Ninguno", description: "Sin enchufe asociado" }];
 let selectionReturnScreen = "settings-screen";
-let manualTrainingRecordingKind = null;
-let manualTrainingSample = null;
-let manualTrainingSampleUrl = null;
-let manualTrainingStopTimer = null;
+let browserAudioStarting = null;
+
+function normalizeDirectServerUrl(value) {
+  const url = new URL(String(value || "").trim());
+  if (!["http:", "https:"].includes(url.protocol)) throw new Error("La URL debe comenzar con http:// o https://");
+  url.pathname = "";
+  url.search = "";
+  url.hash = "";
+  return url.toString().replace(/\/$/, "");
+}
+
+function directServer(urlValue) {
+  const httpUrl = normalizeDirectServerUrl(urlValue);
+  const url = new URL(httpUrl);
+  const secure = url.protocol === "https:";
+  return {
+    id: httpUrl,
+    name: url.hostname,
+    address: url.hostname,
+    port: Number(url.port || (secure ? 443 : 80)),
+    protocolVersion: "5",
+    httpUrl,
+    webSocketUrl: `${secure ? "wss:" : "ws:"}//${url.host}/ws`,
+    musicApiUrl: `${httpUrl}/music-gateway/v1`
+  };
+}
+
+function storedAssistantConfig() {
+  try {
+    return {
+      name: "Asistente",
+      wakeWordEnabled: true,
+      connectedPowerDeviceId: null,
+      ...JSON.parse(localStorage.getItem(ASSISTANT_STORAGE_KEY) || "{}")
+    };
+  } catch {
+    return { name: "Asistente", wakeWordEnabled: true, connectedPowerDeviceId: null };
+  }
+}
+
+function wakeWordPayload(config = storedAssistantConfig()) {
+  return {
+    enabled: config.wakeWordEnabled === true,
+    provider: "stt",
+    modelId: null,
+    wakeWord: config.name,
+    connectedPowerDeviceId: config.connectedPowerDeviceId || null
+  };
+}
 
 const llmProviderDefaults = {
   ollama: { baseUrl: "http://127.0.0.1:11434", model: "qwen3.5:9b" },
@@ -103,26 +147,26 @@ function weatherIconSvg(code, isDay) {
 
 elements["weather-icon"].innerHTML = weatherIconSvg(0, true);
 
-function applyServerState(state) {
-  serverState = state;
-  const selected = state?.selected;
-  locationApiUrl = selected ? `${selected.httpUrl}/config/location` : null;
-  llmApiUrl = selected ? `${selected.httpUrl}/config/llm` : null;
-  homeApiUrl = selected ? `${selected.httpUrl}/home` : null;
-  musicApiUrl = selected?.musicApiUrl || null;
-  elements["server-summary"].textContent = selected
-    ? `${selected.name} · ${selected.address}:${selected.port}`
-    : state?.selectionRequired ? "Selecciona un servidor" : "Buscando…";
+function applyServerState(server) {
+  serverState = server;
+  locationApiUrl = server ? `${server.httpUrl}/config/location` : null;
+  llmApiUrl = server ? `${server.httpUrl}/config/llm` : null;
+  homeApiUrl = server ? `${server.httpUrl}/home` : null;
+  musicApiUrl = server?.musicApiUrl || null;
+  voiceApiUrl = server ? `${server.httpUrl}/tts` : null;
+  elements["server-summary"].textContent = server
+    ? `${server.name} · ${server.address}:${server.port}`
+    : "Servidor no disponible";
 }
 
 async function loadLocalIdentity() {
-  try {
-    const response = await fetch(`${serverApiUrl}/identity`, { cache: "no-store" });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    localSatelliteId = String((await response.json()).satellite?.id || "").trim() || null;
-  } catch {
-    localSatelliteId = null;
+  const stored = localStorage.getItem(SATELLITE_ID_STORAGE_KEY);
+  if (stored) {
+    localSatelliteId = stored;
+    return;
   }
+  localSatelliteId = createBrowserSatelliteId();
+  localStorage.setItem(SATELLITE_ID_STORAGE_KEY, localSatelliteId);
 }
 
 function musicRequest(path, options = {}) {
@@ -132,7 +176,7 @@ function musicRequest(path, options = {}) {
 }
 
 async function homeRequest(path, options = {}) {
-  if (!homeApiUrl) throw new Error("Selecciona primero un servidor disponible.");
+  if (!homeApiUrl) throw new Error("El servidor no está disponible.");
   const response = await fetch(`${homeApiUrl}${path}`, options);
   const result = await response.json();
   if (!response.ok) throw new Error(result.message || `HTTP ${response.status}`);
@@ -217,57 +261,25 @@ function renderHomeCatalog() {
   }));
 }
 
-async function loadServers({ refresh = false } = {}) {
-  elements["server-status"].textContent = refresh ? "Buscando servidores…" : "";
+async function loadServer() {
   try {
-    const response = await fetch(`${serverApiUrl}${refresh ? "/servers/discover" : "/servers"}`, { method: refresh ? "POST" : "GET" });
-    const state = await response.json();
-    if (!response.ok) throw new Error(state.message || `HTTP ${response.status}`);
-    applyServerState(state);
-    renderServers();
-    elements["server-status"].textContent = state.selectionRequired
-        ? "Hay varios servidores disponibles. Selecciona uno."
-        : state.selected
-          ? "Servidor disponible."
-          : "No se encontraron servidores todavía.";
-    return state;
-  } catch (error) {
-    elements["server-status"].textContent = "No se pudo consultar el descubrimiento del satélite.";
-    return null;
-  }
-}
-
-function renderServers() {
-  const servers = serverState?.discovered || [];
-  elements["server-list"].replaceChildren(...servers.map((server) => {
-    const selected = server.id === serverState.selected?.id;
-    const button = document.createElement("button");
-    button.className = `device-option${selected ? " selected" : ""}`;
-    button.disabled = selected;
-    button.innerHTML = `<span><strong></strong><small></small></span><span class="selection-mark">${selected ? "✓" : ""}</span>`;
-    button.querySelector("strong").textContent = server.name;
-    button.querySelector("small").textContent = `${server.address}:${server.port}${server.manual ? " · Configuración manual" : " · Descubierto en la red"}`;
-    button.addEventListener("click", () => selectServer(server.id));
-    return button;
-  }));
-}
-
-async function selectServer(id) {
-  elements["server-status"].textContent = "Conectando con el servidor…";
-  try {
-    const response = await fetch(`${serverApiUrl}/server`, {
-      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id })
+    const response = await fetch(`${serverApiUrl}/health`, {
+      cache: "no-store",
+      signal: AbortSignal.timeout(1_500)
     });
-    const state = await response.json();
-    if (!response.ok) throw new Error(state.message || `HTTP ${response.status}`);
-    applyServerState(state);
-    renderServers();
-    elements["server-status"].textContent = "Servidor seleccionado.";
-    reconnectDisplaySocket();
-    await loadMusicDestinations();
-    void loadCurrentPlayback();
-  } catch (error) {
-    elements["server-status"].textContent = error.message;
+    const health = await response.json();
+    if (!response.ok) throw new Error(health.message || `HTTP ${response.status}`);
+    if (health.protocolVersion !== "5") throw new Error(`Protocolo ${health.protocolVersion || "desconocido"} incompatible`);
+    const server = {
+      ...directServer(serverApiUrl),
+      id: health.server?.id || serverApiUrl,
+      name: health.server?.name || location.hostname
+    };
+    applyServerState(server);
+    return server;
+  } catch {
+    applyServerState(null);
+    return null;
   }
 }
 
@@ -332,7 +344,7 @@ function renderPlayback(playback = {}) {
   elements["playback-volume-value"].textContent = hasVolume ? `${Math.round(volume)}%` : "--";
   updatePlaybackProgress();
   const artworkPath = item?.artworkUrl || item?.artwork?.url;
-  const artworkUrl = artworkPath && musicApiUrl ? new URL(artworkPath, `${musicApiUrl}/`).toString() : artworkPath;
+  const artworkUrl = resolveMusicArtworkUrl(artworkPath, musicApiUrl);
   if (artworkUrl && /^https?:\/\//.test(artworkUrl)) {
     elements["playback-cover"].src = artworkUrl;
     elements["playback-cover"].alt = `Portada de ${item.name || "la reproducción actual"}`;
@@ -427,7 +439,7 @@ function fillLocation(location) {
 
 async function loadLocation() {
   if (!locationApiUrl) {
-    elements["location-status"].textContent = "Selecciona primero un servidor disponible.";
+    elements["location-status"].textContent = "El servidor no está disponible.";
     return false;
   }
   try {
@@ -525,7 +537,7 @@ function fillLlmConfig(config) {
 
 async function loadLlmConfig() {
   if (!llmApiUrl) {
-    elements["llm-status"].textContent = "Selecciona primero un servidor disponible.";
+    elements["llm-status"].textContent = "El servidor no está disponible.";
     return false;
   }
   try {
@@ -600,206 +612,18 @@ async function deleteLlmCredential() {
   }
 }
 
-let wakeWordModels = [];
-
 function formatDateTime(value) {
   return value ? new Date(value).toLocaleString("es-CL", { dateStyle: "medium", timeStyle: "short" }) : "fecha desconocida";
 }
 
-function selectedWakeWordModelId() {
-  const value = elements["wake-word-method"].value;
-  return value.startsWith("model:") ? value.slice("model:".length) : null;
-}
-
-function renderWakeWordModelStatus() {
-  elements["wake-word-method-fields"].hidden = !elements["wake-word-enabled"].checked;
-  const modelId = selectedWakeWordModelId();
-  const model = wakeWordModels.find((item) => item.id === modelId);
-  elements["wake-word-training-mode"].disabled = !model;
-  elements["wake-word-training-open"].disabled = !model;
-  if (!model) elements["wake-word-training-mode"].checked = false;
-  elements["wake-word-model-update"].hidden = !model || (model.local?.downloaded && !model.updateAvailable);
-  if (!model) {
-    elements["wake-word-model-status"].textContent = modelId
-      ? "El modelo seleccionado ya no está disponible en el servidor."
-      : "Vosk reconoce el nombre configurado sin descargar un modelo.";
-    return;
-  }
-  if (!model.local) {
-    elements["wake-word-model-status"].textContent = `“${model.wakeWord}” · aún no descargado en este satélite.`;
-  } else if (model.updateAvailable) {
-    elements["wake-word-model-status"].textContent = `Hay una actualización disponible desde ${formatDateTime(model.file.modifiedAt)}.`;
-  } else {
-    elements["wake-word-model-status"].textContent = `Modelo descargado y vigente · ${formatDateTime(model.file.modifiedAt)}.`;
-  }
-}
-
-function renderWakeWordModels(selectedMode = "vosk", selectedModelId = null) {
-  const select = elements["wake-word-method"];
-  select.replaceChildren(new Option("Vosk — método actual", "vosk"));
-  for (const model of wakeWordModels) {
-    const suffix = model.updateAvailable ? " · actualización disponible" : model.local?.downloaded ? " · descargado" : "";
-    select.add(new Option(`${model.name} — “${model.wakeWord}”${suffix}`, `model:${model.id}`));
-  }
-  const value = selectedMode === "model" && selectedModelId ? `model:${selectedModelId}` : "vosk";
-  if (![...select.options].some((option) => option.value === value) && selectedModelId) {
-    select.add(new Option(`${selectedModelId} — no disponible`, value));
-  }
-  select.value = value;
-  renderWakeWordModelStatus();
-}
-
-async function loadWakeWordModels(config) {
-  elements["wake-word-model-status"].textContent = "Consultando modelos del servidor…";
-  try {
-    const response = await fetch(`${assistantApiUrl}/wake-word-models`, { cache: "no-store" });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.message || `HTTP ${response.status}`);
-    wakeWordModels = result.models || [];
-    renderWakeWordModels(config.wakeWordMode, config.wakeWordModelId);
-  } catch (error) {
-    wakeWordModels = [];
-    renderWakeWordModels(config.wakeWordMode, config.wakeWordModelId);
-    elements["wake-word-model-status"].textContent = `No se pudo consultar el catálogo: ${error.message}`;
-  }
-}
-
-async function downloadSelectedWakeWordModel() {
-  const modelId = selectedWakeWordModelId();
-  if (!modelId) return;
-  const button = elements["wake-word-model-update"];
-  button.disabled = true;
-  elements["wake-word-model-status"].textContent = "Descargando y verificando el modelo…";
-  try {
-    const response = await fetch(`${assistantApiUrl}/wake-word-models/${modelId}/download`, { method: "POST" });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.message || `HTTP ${response.status}`);
-    await loadWakeWordModels({ wakeWordMode: "model", wakeWordModelId: modelId });
-    elements["wake-word-model-status"].textContent = "Modelo actualizado y verificado correctamente.";
-  } catch (error) {
-    elements["wake-word-model-status"].textContent = error.message;
-  } finally {
-    button.disabled = false;
-  }
-}
-
-function clearManualTrainingSample() {
-  if (manualTrainingSampleUrl) URL.revokeObjectURL(manualTrainingSampleUrl);
-  manualTrainingSample = null;
-  manualTrainingSampleUrl = null;
-  elements["training-review-audio"].removeAttribute("src");
-  elements["training-review"].hidden = true;
-}
-
-function setManualTrainingRecording(recording) {
-  elements["training-record-positive"].disabled = recording;
-  elements["training-record-negative"].disabled = recording;
-  elements["training-record-stop"].hidden = !recording;
-}
-
-async function startManualTrainingRecording(kind) {
-  clearManualTrainingSample();
-  elements["training-status"].textContent = "Preparando el micrófono…";
-  try {
-    const response = await fetch(`${assistantApiUrl}/wake-word-training/recordings/start`, { method: "POST" });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.message || `HTTP ${response.status}`);
-    manualTrainingRecordingKind = kind;
-    setManualTrainingRecording(true);
-    elements["training-status"].textContent = kind === "positive"
-      ? `Grabando muestra positiva: di “${elements["assistant-name"].value}”.`
-      : "Grabando muestra negativa: habla o reproduce un sonido que no debería activar el asistente.";
-    clearTimeout(manualTrainingStopTimer);
-    manualTrainingStopTimer = setTimeout(() => stopManualTrainingRecording(), 10_000);
-  } catch (error) {
-    elements["training-status"].textContent = error.message;
-  }
-}
-
-async function stopManualTrainingRecording() {
-  if (!manualTrainingRecordingKind) return;
-  clearTimeout(manualTrainingStopTimer);
-  elements["training-record-stop"].disabled = true;
-  elements["training-status"].textContent = "Preparando la grabación para revisión…";
-  try {
-    const response = await fetch(`${assistantApiUrl}/wake-word-training/recordings/stop`, { method: "POST" });
-    if (!response.ok) {
-      const result = await response.json();
-      throw new Error(result.message || `HTTP ${response.status}`);
-    }
-    manualTrainingSample = { kind: manualTrainingRecordingKind, blob: await response.blob() };
-    manualTrainingSampleUrl = URL.createObjectURL(manualTrainingSample.blob);
-    elements["training-review-audio"].src = manualTrainingSampleUrl;
-    elements["training-review-title"].textContent = manualTrainingSample.kind === "positive"
-      ? "Revisar muestra positiva"
-      : "Revisar muestra negativa";
-    elements["training-review"].hidden = false;
-    elements["training-status"].textContent = "Escucha la grabación y confirma si deseas enviarla.";
-  } catch (error) {
-    elements["training-status"].textContent = error.message;
-  } finally {
-    manualTrainingRecordingKind = null;
-    elements["training-record-stop"].disabled = false;
-    setManualTrainingRecording(false);
-  }
-}
-
-async function sendManualTrainingSample() {
-  if (!manualTrainingSample) return;
-  elements["training-sample-send"].disabled = true;
-  elements["training-status"].textContent = "Enviando muestra al servidor…";
-  try {
-    const response = await fetch(`${assistantApiUrl}/wake-word-training/samples/${manualTrainingSample.kind}`, {
-      method: "POST",
-      headers: { "Content-Type": "audio/wav" },
-      body: manualTrainingSample.blob
-    });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.message || `HTTP ${response.status}`);
-    const label = manualTrainingSample.kind === "positive" ? "positiva" : "negativa";
-    clearManualTrainingSample();
-    elements["training-status"].textContent = `Muestra ${label} enviada correctamente.`;
-  } catch (error) {
-    elements["training-status"].textContent = error.message;
-  } finally {
-    elements["training-sample-send"].disabled = false;
-  }
-}
-
-async function forceWakeWordTraining() {
-  if (!confirm("¿Iniciar ahora el entrenamiento del modelo con las muestras almacenadas?")) return;
-  elements["training-force"].disabled = true;
-  elements["training-status"].textContent = "Solicitando entrenamiento al servidor…";
-  try {
-    const response = await fetch(`${assistantApiUrl}/wake-word-training/train`, { method: "POST" });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.message || `HTTP ${response.status}`);
-    elements["training-status"].textContent = "Entrenamiento iniciado. El satélite descargará automáticamente el modelo cuando esté disponible.";
-  } catch (error) {
-    elements["training-status"].textContent = error.message;
-  } finally {
-    elements["training-force"].disabled = false;
-  }
-}
-
 async function loadAssistantConfig() {
-  try {
-    const response = await fetch(assistantApiUrl);
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const { config } = await response.json();
-    const method = config.wakeWordMode === "model" ? "modelo entrenado" : "Vosk";
-    const training = config.wakeWordTrainingMode === true ? " · entrenamiento" : "";
-    elements["assistant-summary"].textContent = `${config.name} · ${config.wakeWordEnabled !== false ? `${method}${training}` : "sólo botón"}`;
-    elements["assistant-name"].value = config.name;
-    elements["wake-word-enabled"].checked = config.wakeWordEnabled !== false;
-    elements["wake-word-training-mode"].checked = config.wakeWordTrainingMode === true;
-    await loadWakeWordModels(config);
-    await loadConnectedPowerDevices(config.connectedPowerDeviceId);
-    return true;
-  } catch (error) {
-    elements["assistant-status"].textContent = "No se pudo cargar la configuración del asistente.";
-    return false;
-  }
+  const localConfig = storedAssistantConfig();
+  elements["assistant-summary"].textContent = `${localConfig.name} · ${localConfig.wakeWordEnabled !== false ? "detección central" : "sólo botón"}`;
+  elements["assistant-name"].value = localConfig.name;
+  elements["wake-word-enabled"].checked = localConfig.wakeWordEnabled !== false;
+  await loadConnectedPowerDevices(localConfig.connectedPowerDeviceId);
+  elements["assistant-status"].textContent = "";
+  return true;
 }
 
 async function loadConnectedPowerDevices(selectedId = null) {
@@ -833,34 +657,23 @@ async function saveAssistantName(event) {
   event.preventDefault();
   const button = elements["assistant-form"].querySelector("button[type=submit]");
   button.disabled = true;
-  const modelId = selectedWakeWordModelId();
-  elements["assistant-status"].textContent = modelId ? "Descargando y activando el modelo…" : "Validando con Vosk…";
+  elements["assistant-status"].textContent = "Guardando la asignación central…";
   try {
-    const response = await fetch(assistantApiUrl, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: elements["assistant-name"].value,
-        wakeWordEnabled: elements["wake-word-enabled"].checked,
-        wakeWordMode: modelId ? "model" : "vosk",
-        wakeWordModelId: modelId,
-        wakeWordTrainingMode: modelId && elements["wake-word-training-mode"].checked,
-        connectedPowerDeviceId: elements["connected-power-device"].value || null
-      })
-    });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.message || `HTTP ${response.status}`);
-    elements["assistant-name"].value = result.config.name;
-    elements["wake-word-enabled"].checked = result.config.wakeWordEnabled !== false;
-    elements["wake-word-training-mode"].checked = result.config.wakeWordTrainingMode === true;
-    await loadWakeWordModels(result.config);
-    elements["connected-power-device"].value = result.config.connectedPowerDeviceId || "";
+    const config = {
+      name: elements["assistant-name"].value.trim(),
+      wakeWordEnabled: elements["wake-word-enabled"].checked,
+      connectedPowerDeviceId: elements["connected-power-device"].value || null
+    };
+    if (config.name.length < 2 || config.name.length > 40) throw new Error("El nombre debe tener entre 2 y 40 caracteres.");
+    localStorage.setItem(ASSISTANT_STORAGE_KEY, JSON.stringify(config));
+    browserAudio.configureWakeWord(wakeWordPayload(config));
+    elements["assistant-name"].value = config.name;
+    elements["wake-word-enabled"].checked = config.wakeWordEnabled !== false;
+    elements["connected-power-device"].value = config.connectedPowerDeviceId || "";
     renderConnectedPowerDeviceLabel();
-    const method = result.config.wakeWordMode === "model" ? "modelo entrenado" : "Vosk";
-    const training = result.config.wakeWordTrainingMode === true ? " · entrenamiento" : "";
-    elements["assistant-summary"].textContent = `${result.config.name} · ${result.config.wakeWordEnabled !== false ? `${method}${training}` : "sólo botón"}`;
-    elements["assistant-status"].textContent = result.config.wakeWordEnabled
-      ? `Configuración guardada. Di “${result.config.name}” o toca el micrófono.`
+    elements["assistant-summary"].textContent = `${config.name} · ${config.wakeWordEnabled !== false ? "detección central" : "sólo botón"}`;
+    elements["assistant-status"].textContent = config.wakeWordEnabled
+      ? `Configuración guardada. Di “${config.name}” o toca el micrófono.`
       : "Configuración guardada. La escucha continua está apagada; usa el botón de micrófono.";
   } catch (error) {
     elements["assistant-status"].textContent = error.message;
@@ -874,7 +687,7 @@ function updateMusicSummary() {
   const destinations = musicState.destinations || [];
   const activeDestination = destinations.find((item) => item.active || item.id === musicState.activeDestinationId);
   elements["music-destinations-summary"].textContent = activeDestination?.name
-    || (destinations.length ? `${destinations.length} disponibles` : "Sin configurar");
+    || (destinations.length ? "Sin destino activo" : "Sin configurar");
   const sources = musicState.sources || [];
   const active = sources.find((item) => item.active || item.id === musicState.activeSourceId);
   const sourceSummary = sources.length ? `Origen activo: ${active?.name || "sin seleccionar"}` : "Sin orígenes configurados";
@@ -897,7 +710,7 @@ function renderMusicSources() {
     button.addEventListener("click", async () => {
       button.disabled = true;
       try {
-        const response = await musicRequest("/sources/active", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: source.id }) });
+        const response = await musicRequest("/sources/active", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ target: source.id }) });
         const result = await response.json();
         if (!response.ok) throw new Error(result.message || `HTTP ${response.status}`);
         musicState.activeSourceId = result.id;
@@ -933,7 +746,7 @@ function renderMusicDestinations() {
       elements["music-destinations-status"].textContent = "Cambiando destino activo…";
       try {
         const response = await musicRequest("/destinations/active", {
-          method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: destination.id })
+          method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ target: destination.id })
         });
         const result = await response.json();
         if (!response.ok) throw new Error(result.message || `HTTP ${response.status}`);
@@ -958,8 +771,8 @@ function renderMusicDestinations() {
 
 async function loadMusicDestinations({ discover = false } = {}) {
   if (!musicApiUrl) {
-    elements["music-destinations-status"].textContent = "Selecciona primero un servidor disponible.";
-    elements["music-sources-status"].textContent = "Selecciona primero un servidor disponible.";
+    elements["music-destinations-status"].textContent = "El servidor no está disponible.";
+    elements["music-sources-status"].textContent = "El servidor no está disponible.";
     return false;
   }
   elements["music-destinations-status"].textContent = discover ? "Buscando reproductores…" : "Cargando destinos…";
@@ -989,8 +802,8 @@ async function loadMusicDestinations({ discover = false } = {}) {
 
 async function loadMusicAssistantStatus() {
   if (!musicApiUrl) {
-    elements["music-assistant-summary"].textContent = "Selecciona un servidor";
-    elements["music-assistant-status"].textContent = "Selecciona primero un servidor disponible.";
+    elements["music-assistant-summary"].textContent = "Servidor no disponible";
+    elements["music-assistant-status"].textContent = "El servidor no está disponible.";
     return false;
   }
   try {
@@ -1052,10 +865,6 @@ function updateAudioMeter({ level = 0, db = -60, clipping = false }) {
   elements["audio-level-peak"].style.left = `${peakAudioLevel * 100}%`;
   elements["audio-level-db"].textContent = `${Math.round(db)} dB`;
   elements["audio-level-bar"].closest(".audio-meter").classList.toggle("clipping", clipping);
-  elements["training-audio-level-bar"].style.width = `${displayedAudioLevel * 100}%`;
-  elements["training-audio-level-peak"].style.left = `${peakAudioLevel * 100}%`;
-  elements["training-audio-level-db"].textContent = `${Math.round(db)} dB`;
-  elements["training-audio-level-bar"].closest(".audio-meter").classList.toggle("clipping", clipping);
 }
 
 function setMicrophoneMeterVisible(visible) {
@@ -1067,32 +876,13 @@ function setMicrophoneMeterVisible(visible) {
   if (!visible) updateAudioMeter({});
 }
 
-function setListeningIndicator(active, label = "Te escucho", { reportableFalseDetection = false } = {}) {
+function setListeningIndicator(active, label = "Te escucho") {
   elements["listening-label"].textContent = label;
   elements["listening-indicator"].classList.toggle("active", active);
   elements["listening-indicator"].setAttribute("aria-hidden", String(!active));
-  elements["report-false-detection"].hidden = !active || !reportableFalseDetection;
-  if (!active) elements["report-false-detection"].disabled = false;
   elements["conversation-panel"].classList.toggle("listening", active);
   elements["manual-listen"].classList.toggle("active", active);
   elements["manual-listen"].setAttribute("aria-pressed", String(active));
-}
-
-async function reportFalseDetection() {
-  const button = elements["report-false-detection"];
-  if (button.disabled) return;
-  button.disabled = true;
-  elements.transcript.textContent = "Enviando la detección falsa…";
-  try {
-    const response = await fetch(`${serverApiUrl}/voice/report-false-detection`, { method: "POST" });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.message || `HTTP ${response.status}`);
-    setListeningIndicator(false);
-    elements.transcript.textContent = "Detección falsa reportada para futuros entrenamientos.";
-  } catch (error) {
-    elements.transcript.textContent = `No se pudo reportar: ${error.message}`;
-    button.disabled = false;
-  }
 }
 
 async function startManualListening() {
@@ -1100,11 +890,12 @@ async function startManualListening() {
   manualListenRequestPending = true;
   elements["manual-listen"].disabled = true;
   try {
-    const response = await fetch(`${serverApiUrl}/voice/listen`, { method: "POST" });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.message || `HTTP ${response.status}`);
-    setListeningIndicator(true, "Te escucho");
-    elements.transcript.textContent = "Escuchando…";
+    await browserAudio.resume();
+    browserAudio.sendEvent("voice.listen.requested", {
+      manual: true,
+      reason: "manual_request",
+      timeoutMs: 7_000
+    });
   } catch (error) {
     elements.transcript.textContent = error.message;
   } finally {
@@ -1155,21 +946,6 @@ function renderConnectedPowerDeviceLabel() {
   elements["connected-power-device-label"].textContent = selected?.name || selectedId || "Ninguno";
 }
 
-function formatBytes(value) {
-  if (!Number.isFinite(value)) return "No disponible";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  const unit = Math.min(Math.floor(Math.log(Math.max(value, 1)) / Math.log(1024)), units.length - 1);
-  return `${(value / (1024 ** unit)).toLocaleString("es-CL", { maximumFractionDigits: unit > 2 ? 1 : 0 })} ${units[unit]}`;
-}
-
-function formatUptime(seconds) {
-  if (!Number.isFinite(seconds)) return "No disponible";
-  const days = Math.floor(seconds / 86400);
-  const hours = Math.floor((seconds % 86400) / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  return [days ? `${days} d` : null, hours ? `${hours} h` : null, `${minutes} min`].filter(Boolean).join(" ");
-}
-
 function systemInfoCard(title, value, detail = "") {
   const card = document.createElement("article");
   card.className = "system-info-card";
@@ -1181,36 +957,27 @@ function systemInfoCard(title, value, detail = "") {
 }
 
 async function loadSystemInformation() {
-  elements["system-info-status"].textContent = "Consultando el satélite…";
-  try {
-    const response = await fetch(systemApiUrl, { cache: "no-store" });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const info = await response.json();
-    const memoryPercent = info.memory.total ? (info.memory.used / info.memory.total) * 100 : 0;
-    const diskPercent = info.disk?.total ? (info.disk.used / info.disk.total) * 100 : 0;
-    const addresses = info.network?.map((item) => `${item.interface}: ${item.address}`).join(" · ") || "Sin dirección IPv4";
-    const serverVersion = info.server?.version || (info.server ? "No disponible" : "Sin servidor seleccionado");
-    const serverDetail = info.server?.name
-      ? `${info.server.name}${info.server.available === false ? " · desconectado" : ""}`
-      : "";
-    elements["system-info-grid"].replaceChildren(
-      systemInfoCard("Versión del satélite", info.version || "Desconocida"),
-      systemInfoCard("Versión del servidor", serverVersion, serverDetail),
-      systemInfoCard("Equipo", info.hostname, `${info.architecture} · Node ${info.nodeVersion}`),
-      systemInfoCard("Sistema operativo", info.operatingSystem, info.kernel),
-      systemInfoCard("CPU", `${info.cpu.usagePercent.toLocaleString("es-CL", { maximumFractionDigits: 1 })}% en uso`, `${info.cpu.cores} núcleos · ${info.cpu.model}`),
-      systemInfoCard("Temperatura CPU", info.cpu.temperatureCelsius === null ? "No disponible" : `${info.cpu.temperatureCelsius.toLocaleString("es-CL", { maximumFractionDigits: 1 })} °C`, `Carga: ${info.cpu.loadAverage.map((value) => value.toFixed(2)).join(" · ")}`),
-      systemInfoCard("Memoria", `${formatBytes(info.memory.available)} disponibles`, `${formatBytes(info.memory.used)} usados de ${formatBytes(info.memory.total)} · ${memoryPercent.toFixed(0)}%`),
-      systemInfoCard("Almacenamiento /", info.disk ? `${formatBytes(info.disk.available)} disponibles` : "No disponible", info.disk ? `${formatBytes(info.disk.used)} usados de ${formatBytes(info.disk.total)} · ${diskPercent.toFixed(0)}%` : ""),
-      systemInfoCard("Tiempo encendido", formatUptime(info.uptimeSeconds)),
-      systemInfoCard("Red", addresses)
-    );
-    elements["system-info-summary"].textContent = `${info.hostname} · Satélite ${info.version || "?"} · Servidor ${info.server?.version || "?"}`;
-    elements["system-info-status"].textContent = `Actualizado a las ${new Date().toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`;
-  } catch {
-    elements["system-info-status"].textContent = "No se pudo obtener la información del satélite.";
-    elements["system-info-summary"].textContent = "No disponible";
-  }
+  elements["system-info-status"].textContent = "Consultando Chromium…";
+  const audio = browserAudio.snapshot();
+  const selected = serverState;
+  const platform = navigator.userAgentData?.platform || navigator.platform || "Plataforma desconocida";
+  const browser = navigator.userAgentData?.brands?.map((item) => `${item.brand} ${item.version}`).join(" · ") || navigator.userAgent;
+  elements["system-info-grid"].replaceChildren(
+    systemInfoCard("Identidad del satélite", localSatelliteId || "No asignada"),
+    systemInfoCard("Servidor", selected?.name || "Sin seleccionar", selected?.httpUrl || ""),
+    systemInfoCard("Plataforma", platform, browser),
+    systemInfoCard("CPU disponible", `${navigator.hardwareConcurrency || "?"} núcleos lógicos`),
+    systemInfoCard("Memoria declarada", navigator.deviceMemory ? `${navigator.deviceMemory} GB` : "No expuesta por Chromium"),
+    systemInfoCard("Pantalla", `${screen.width} × ${screen.height}`, `${devicePixelRatio}× densidad`),
+    systemInfoCard("Contexto seguro", window.isSecureContext ? "Sí" : "No", window.isSecureContext ? "Micrófono habilitable" : "Usa localhost o HTTPS para capturar audio"),
+    systemInfoCard("Captura", audio.started ? `${audio.captureSampleRate} Hz` : "No iniciada", audio.trackSettings?.deviceId ? "Dispositivo configurado" : "Entrada predeterminada"),
+    systemInfoCard("Procesamiento de voz", audio.trackSettings
+      ? `Ruido ${audio.trackSettings.noiseSuppression === false ? "off" : "on"} · Eco ${audio.trackSettings.echoCancellation === false ? "off" : "on"}`
+      : "Sin datos", `Ganancia automática ${audio.trackSettings?.autoGainControl === true ? "on" : "off"}`),
+    systemInfoCard("Reproducción", audio.started ? `${audio.playbackSampleRate} Hz` : "No iniciada", globalThis.AudioContext && typeof AudioContext.prototype.setSinkId === "function" ? "Selección de salida disponible" : "Salida predeterminada de Chromium")
+  );
+  elements["system-info-summary"].textContent = `${platform} · Chromium web-only`;
+  elements["system-info-status"].textContent = `Actualizado a las ${new Date().toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`;
 }
 
 function enableConfigurationDragScrolling() {
@@ -1329,85 +1096,34 @@ function updateAudioSummaries() {
   const outputFallback = effective.outputDeviceId !== (audioState.config.outputDeviceIds[0] || null) ? " · fallback" : "";
   elements["input-summary"].textContent = `${deviceName("input", effective.inputDeviceId)}${channel}${inputFallback}`;
   elements["output-summary"].textContent = `${deviceName("output", effective.outputDeviceId)}${outputFallback}`;
-  const voice = audioState.voices?.find((item) => item.id === audioState.config.ttsVoiceId) || audioState.voices?.[0];
-  elements["voice-summary"].textContent = voice?.name || "Sin voces disponibles";
-  const player = audioState.musicPlayer;
-  elements["music-player-summary"].textContent = player?.enabled ? (player.running ? "Activo" : "No iniciado") : "Deshabilitado";
 }
 
 async function loadAudio() {
   elements["audio-status"].textContent = "Buscando dispositivos…";
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8_000);
   try {
-    const response = await fetch(audioApiUrl, { signal: controller.signal });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    audioState = await response.json();
+    const devices = await browserAudio.devices({ requestPermission: true });
+    const config = browserAudio.config;
+    audioState = {
+      config: {
+        inputDeviceIds: config.inputDeviceId ? [config.inputDeviceId] : [],
+        outputDeviceIds: config.outputDeviceId ? [config.outputDeviceId] : [],
+        inputChannelsByDevice: config.inputDeviceId ? { [config.inputDeviceId]: config.inputChannel || 0 } : {}
+      },
+      effectiveConfig: {
+        inputDeviceId: config.inputDeviceId,
+        outputDeviceId: config.outputDeviceId,
+        inputChannel: config.inputChannel || 0
+      },
+      devices,
+      provider: "Chromium"
+    };
     elements["audio-status"].textContent = "";
     updateAudioSummaries();
     return true;
   } catch (error) {
-    elements["audio-status"].textContent = error.name === "AbortError"
-      ? "La búsqueda de dispositivos tardó demasiado. Intenta nuevamente."
-      : "No se pudo conectar con el servicio de audio del satélite.";
+    elements["audio-status"].textContent = `No se pudieron consultar los dispositivos de Chromium: ${error.message}`;
     return false;
-  } finally {
-    clearTimeout(timeout);
   }
-}
-
-function fillMusicPlayer() {
-  if (!audioState) return;
-  elements["music-player-output"].value = audioState.config.musicOutputDeviceId || "";
-  renderMusicPlayerOutputs();
-  elements["music-player-enabled"].checked = audioState.config.musicPlayerEnabled !== false;
-  const playerStatus = audioState.musicPlayer?.running
-    ? "Sendspin está activo y disponible para Music Assistant."
-    : (audioState.config.musicPlayerEnabled === false ? "El reproductor está deshabilitado." : (audioState.musicPlayer?.error || "Sendspin no está activo. Comprueba que esté instalado en el satélite."));
-  elements["music-player-status"].textContent = playerStatus;
-}
-
-function renderMusicPlayerOutputs() {
-  const configured = elements["music-player-output"].value.trim();
-  const selected = /^(?:null|undefined|none|\(null\)|<null>)$/i.test(configured) ? "" : configured;
-  if (!selected && configured) elements["music-player-output"].value = "";
-  const outputs = [
-    { id: "", name: "Salida predeterminada", description: "Sendspin utilizará la salida predeterminada del sistema" },
-    ...(audioState?.devices.output || []).map((device) => ({ id: device.id, name: device.name || device.id, description: `${device.available === false ? "No disponible" : "Disponible"} · ${device.id}`, available: device.available !== false }))
-  ];
-  if (selected && !outputs.some((item) => item.id === selected)) outputs.push({ id: selected, name: selected, description: "Configuración guardada anteriormente", available: true });
-  elements["music-player-output-list"].replaceChildren(...outputs.map((output) => {
-    const active = output.id === selected;
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = `device-option${active ? " selected" : ""}`;
-    button.disabled = output.available === false;
-    button.innerHTML = `<span><strong></strong><small></small></span><span class="selection-mark">${active ? "✓" : ""}</span>`;
-    button.querySelector("strong").textContent = output.name;
-    button.querySelector("small").textContent = output.description;
-    button.addEventListener("click", () => {
-      elements["music-player-output"].value = output.id;
-      renderMusicPlayerOutputs();
-    });
-    return button;
-  }));
-}
-
-async function saveMusicPlayer(event) {
-  event.preventDefault();
-  const button = elements["music-player-form"].querySelector("button[type=submit]");
-  button.disabled = true;
-  try {
-    await saveConfig({
-      musicOutputDeviceId: elements["music-player-output"].value || null,
-      musicPlayerEnabled: elements["music-player-enabled"].checked
-    }, elements["music-player-status"]);
-    await loadAudio();
-    fillMusicPlayer();
-    elements["music-player-status"].textContent = "Configuración guardada. Music Assistant puede tardar unos segundos en actualizar el destino.";
-  } catch (error) {
-    elements["music-player-status"].textContent = error.message;
-  } finally { button.disabled = false; }
 }
 
 function renderDevices() {
@@ -1443,16 +1159,27 @@ async function openAudio(kind) {
 
 async function saveConfig(update, statusElement = elements["audio-status"]) {
   statusElement.textContent = "Guardando…";
-  const response = await fetch(audioApiUrl, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(update)
-  });
-  const result = await response.json();
-  if (!response.ok) throw new Error(result.message || `HTTP ${response.status}`);
-  audioState.config = result.config;
-  if (result.effectiveConfig) audioState.effectiveConfig = result.effectiveConfig;
+  const browserUpdate = {};
+  if ("inputDeviceId" in update) browserUpdate.inputDeviceId = update.inputDeviceId;
+  if ("outputDeviceId" in update) browserUpdate.outputDeviceId = update.outputDeviceId;
+  if ("inputChannel" in update) browserUpdate.inputChannel = update.inputChannel;
+  if (!Object.keys(browserUpdate).length) throw new Error("Esta configuración pertenece al reproductor Sendspin externo.");
+  await browserAudio.configure(browserUpdate);
+  if ("inputDeviceId" in browserUpdate) {
+    audioState.config.inputDeviceIds = browserUpdate.inputDeviceId ? [browserUpdate.inputDeviceId] : [];
+    audioState.effectiveConfig.inputDeviceId = browserUpdate.inputDeviceId;
+  }
+  if ("outputDeviceId" in browserUpdate) {
+    audioState.config.outputDeviceIds = browserUpdate.outputDeviceId ? [browserUpdate.outputDeviceId] : [];
+    audioState.effectiveConfig.outputDeviceId = browserUpdate.outputDeviceId;
+  }
+  if ("inputChannel" in browserUpdate) {
+    const selected = audioState.config.inputDeviceIds[0];
+    if (selected) audioState.config.inputChannelsByDevice[selected] = browserUpdate.inputChannel;
+    audioState.effectiveConfig.inputChannel = browserUpdate.inputChannel;
+  }
   updateAudioSummaries();
+  await startBrowserAudio();
 }
 
 async function selectDevice(configKey, deviceId) {
@@ -1482,9 +1209,7 @@ async function selectDevice(configKey, deviceId) {
 async function selectInputChannel(deviceId) {
   elements["audio-status"].textContent = "Consultando canales…";
   try {
-    const response = await fetch(`${audioApiUrl}/input-channels?deviceId=${encodeURIComponent(deviceId)}`);
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const { channels } = await response.json();
+    const channels = await browserAudio.inputChannels(deviceId);
     if (channels.length <= 1) {
       await saveConfig({ inputChannel: channels[0]?.id ?? 0 });
       elements["audio-status"].textContent = "Dispositivo guardado";
@@ -1525,9 +1250,9 @@ function renderChannels(channels) {
 }
 
 function renderVoices() {
-  const voices = audioState?.voices || [];
-  elements["voice-list"].replaceChildren(...voices.map((voice, index) => {
-    const selected = voice.id === audioState.config.ttsVoiceId || (!audioState.config.ttsVoiceId && index === 0);
+  const voices = voiceState?.voices || [];
+  elements["voice-list"].replaceChildren(...voices.map((voice) => {
+    const selected = voice.id === voiceState.selectedVoiceId;
     const button = document.createElement("button");
     button.className = `device-option${selected ? " selected" : ""}`;
     button.innerHTML = `<span><strong></strong><small></small></span><span class="selection-mark">${selected ? "✓" : ""}</span>`;
@@ -1536,7 +1261,15 @@ function renderVoices() {
     button.addEventListener("click", async () => {
       document.querySelectorAll("#voice-list .device-option").forEach((option) => { option.disabled = true; });
       try {
-        await saveConfig({ ttsVoiceId: voice.id }, elements["voice-status"]);
+        const response = await fetch(`${voiceApiUrl}/satellites/${encodeURIComponent(localSatelliteId)}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ voiceId: voice.id })
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.message || `HTTP ${response.status}`);
+        voiceState = result;
+        elements["voice-summary"].textContent = voiceState.voices.find((item) => item.id === voiceState.selectedVoiceId)?.name || "Sin voces disponibles";
         elements["voice-status"].textContent = "Voz guardada";
         renderVoices();
       } catch (error) {
@@ -1546,18 +1279,105 @@ function renderVoices() {
     });
     return button;
   }));
-  if (!voices.length) elements["voice-status"].textContent = "No hay voces instaladas para esta plataforma.";
+  if (!voices.length) elements["voice-status"].textContent = "El servidor no tiene voces disponibles.";
+}
+
+async function loadVoiceConfig({ quiet = false } = {}) {
+  if (!voiceApiUrl || !localSatelliteId) {
+    if (!quiet) elements["voice-status"].textContent = "Espera la conexión e identificación del satélite.";
+    return false;
+  }
+  if (!quiet) elements["voice-status"].textContent = "Consultando voces del servidor…";
+  elements["voice-list"].replaceChildren();
+  try {
+    const response = await fetch(`${voiceApiUrl}/satellites/${encodeURIComponent(localSatelliteId)}`, { cache: "no-store" });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.message || `HTTP ${response.status}`);
+    voiceState = result;
+    elements["voice-summary"].textContent = voiceState.voices.find((item) => item.id === voiceState.selectedVoiceId)?.name || "Sin voces disponibles";
+    if (!quiet) elements["voice-status"].textContent = "";
+    renderVoices();
+    return true;
+  } catch (error) {
+    if (!quiet) elements["voice-status"].textContent = error.message;
+    elements["voice-summary"].textContent = "No disponible";
+    return false;
+  }
 }
 
 async function openVoices() {
   showScreen("voice-screen");
-  elements["voice-status"].textContent = "Buscando voces locales…";
-  elements["voice-list"].replaceChildren();
-  if (await loadAudio()) {
-    elements["voice-status"].textContent = "";
-    renderVoices();
+  await loadVoiceConfig();
+}
+
+async function previewVoice() {
+  if (!voiceApiUrl || !localSatelliteId) return;
+  elements["voice-preview"].disabled = true;
+  elements["voice-status"].textContent = "Solicitando prueba al servidor…";
+  try {
+    const response = await fetch(`${voiceApiUrl}/satellites/${encodeURIComponent(localSatelliteId)}/preview`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({})
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.message || `HTTP ${response.status}`);
+    elements["voice-status"].textContent = "Prueba enviada al satélite.";
+  } catch (error) {
+    elements["voice-status"].textContent = error.message;
+  } finally {
+    elements["voice-preview"].disabled = false;
   }
 }
+
+async function startBrowserAudio() {
+  if (browserAudioStarting) return browserAudioStarting;
+  const selected = serverState;
+  if (!selected || !localSatelliteId) return false;
+  browserAudioStarting = (async () => {
+    const assistant = storedAssistantConfig();
+    try {
+      await browserAudio.start({
+        webSocketUrl: selected.webSocketUrl,
+        satelliteId: localSatelliteId,
+        satellite: {
+          id: localSatelliteId,
+          runtime: "browser",
+          name: assistant.name,
+          userAgent: navigator.userAgent
+        },
+        wakeWord: wakeWordPayload(assistant)
+      });
+      return true;
+    } catch (error) {
+      elements.connection.className = "badge text-bg-danger";
+      elements.connection.textContent = "Audio no disponible";
+      elements.response.textContent = `No se pudo iniciar el audio: ${error.message}`;
+      return false;
+    } finally {
+      browserAudioStarting = null;
+    }
+  })();
+  return browserAudioStarting;
+}
+
+browserAudio.addEventListener("audio.level", ({ detail }) => updateAudioMeter(detail.level));
+browserAudio.addEventListener("connection.state", ({ detail }) => {
+  const presentation = {
+    connecting: ["badge text-bg-warning", "Conectando"],
+    connected: ["badge text-bg-success", "Conectado"],
+    disconnected: ["badge text-bg-danger", "Desconectado"]
+  }[detail.state];
+  if (!presentation) return;
+  [elements.connection.className, elements.connection.textContent] = presentation;
+});
+browserAudio.addEventListener("incompatible", () => {
+  elements.connection.className = "badge text-bg-danger";
+  elements.connection.textContent = "Servidor incompatible";
+});
+browserAudio.addEventListener("error", ({ detail }) => {
+  elements.response.textContent = `Audio: ${detail.message}`;
+});
+
+document.addEventListener("pointerdown", () => { void browserAudio.resume(); }, { passive: true });
 
 function reconnectDisplaySocket() {
   displaySocketGeneration += 1;
@@ -1571,44 +1391,13 @@ function reconnectDisplaySocket() {
   connect(displaySocketGeneration);
 }
 
-function connectLocalEvents() {
-  clearTimeout(localEventsReconnectTimer);
-  localEventsReconnectTimer = null;
-  if (localEventsSocket && [WebSocket.OPEN, WebSocket.CONNECTING].includes(localEventsSocket.readyState)) return;
-  const socket = new WebSocket(localEventsUrl);
-  localEventsSocket = socket;
-  socket.addEventListener("message", ({ data }) => {
-    try {
-      const event = JSON.parse(data);
-      if (event.protocolVersion !== "2") return;
-      if (event.type === "audio.level.updated") updateAudioMeter(event.payload);
-      if (event.type === "voice.microphone-monitoring.changed") {
-        setMicrophoneMeterVisible(event.payload.visible === true);
-      }
-      if (event.type === "voice.wake-word.detected") {
-        setListeningIndicator(true, "Te escucho", {
-          reportableFalseDetection: event.payload.reportableFalseDetection === true
-        });
-        elements.transcript.textContent = "Escuchando…";
-      }
-      if (event.type === "voice.listening.ended") setListeningIndicator(false);
-    } catch { /* un evento local inválido no debe afectar el display */ }
-  });
-  socket.addEventListener("close", () => {
-    if (localEventsSocket === socket) localEventsSocket = null;
-    updateAudioMeter({});
-    localEventsReconnectTimer = setTimeout(connectLocalEvents, 2000);
-  });
-  socket.addEventListener("error", () => socket.close());
-}
-
 async function connect(generation = displaySocketGeneration) {
   let listeningGeneration = 0;
-  if (!serverState?.selected) await loadServers();
-  const selected = serverState?.selected;
+  if (!serverState) await loadServer();
+  const selected = serverState;
   if (!selected || generation !== displaySocketGeneration) {
     elements.connection.className = "badge text-bg-warning";
-    elements.connection.textContent = serverState?.selectionRequired ? "Selecciona servidor" : "Buscando servidor";
+    elements.connection.textContent = "Buscando servidor";
     displayReconnectTimer = setTimeout(() => { displayReconnectTimer = null; connect(generation); }, 3000);
     return;
   }
@@ -1626,7 +1415,7 @@ async function connect(generation = displaySocketGeneration) {
   });
   socket.addEventListener("message", ({ data }) => {
     const event = JSON.parse(data);
-    if (event.protocolVersion !== "2") {
+    if (event.protocolVersion !== "5") {
       elements.connection.className = "badge text-bg-danger";
       elements.connection.textContent = "Servidor incompatible";
       socket.close();
@@ -1634,43 +1423,46 @@ async function connect(generation = displaySocketGeneration) {
     }
     const isLocalSatelliteEvent = Boolean(localSatelliteId) && event.source === localSatelliteId;
     const isLocalAssistantEvent = Boolean(localSatelliteId) && event.payload?.targetSatelliteId === localSatelliteId;
-    if (["voice.transcript.received", "voice.wake-word.detected", "voice.listening.ended", "voice.follow-up-listening.started"].includes(event.type) && !isLocalSatelliteEvent) return;
-    if (["assistant.processing.started", "assistant.response.created"].includes(event.type) && !isLocalAssistantEvent) return;
+    if (["voice.transcript.partial", "voice.transcript.received"].includes(event.type) && !isLocalSatelliteEvent) return;
+    if (["voice.state.changed", "assistant.processing.started", "assistant.response.created"].includes(event.type) && !isLocalAssistantEvent) return;
     if (event.type === "voice.transcript.received") {
-      listeningGeneration += 1;
-      setListeningIndicator(false);
       elements.transcript.textContent = event.payload.text;
     }
-    if (event.type === "voice.wake-word.detected") {
+    if (event.type === "voice.transcript.partial") {
+      elements.transcript.textContent = event.payload.text || "Escuchando…";
+    }
+    if (event.type === "voice.state.changed") {
+      const state = event.payload.state;
       listeningGeneration += 1;
-      setListeningIndicator(true, "Te escucho", {
-        reportableFalseDetection: event.payload.reportableFalseDetection === true
-      });
-      elements.transcript.textContent = "Escuchando…";
-    }
-    if (event.type === "voice.listening.ended") {
-      const generation = ++listeningGeneration;
-      setListeningIndicator(false);
-      elements.transcript.textContent = event.payload.reason === "captured"
-        ? "Procesando tu solicitud…"
-        : event.payload.reason === "timeout"
-          ? "No escuché ningún comando."
-          : event.payload.reason === "false_detection_reported"
-            ? "Detección falsa reportada para futuros entrenamientos."
-            : event.payload.reason === "interrupted_by_speech" ? "Esperando voz…" : "No pude entenderte.";
-      setTimeout(() => {
-        if (listeningGeneration === generation) elements.transcript.textContent = "Esperando voz…";
-      }, 2500);
-    }
-    if (event.type === "voice.follow-up-listening.started") {
-      listeningGeneration += 1;
-      setListeningIndicator(true, "Puedes responder");
-      elements.transcript.textContent = "Puedes responder…";
-    }
-    if (event.type === "assistant.processing.started") {
-      setListeningIndicator(false);
-      elements.response.textContent = event.payload.text;
-      elements.response.classList.add("processing");
+      if (state === "wake_detected") {
+        setListeningIndicator(true, "Activación detectada");
+        elements.transcript.textContent = "Activación detectada…";
+      } else if (state === "listening") {
+        setListeningIndicator(true, "Te escucho");
+        if (!event.payload.reason?.includes("stt_wake_word")) elements.transcript.textContent = "Escuchando…";
+      } else if (state === "follow_up_listening") {
+        setListeningIndicator(true, "Puedes responder");
+        elements.transcript.textContent = "Puedes responder…";
+      } else if (state === "processing") {
+        setListeningIndicator(false);
+        elements.response.textContent = "Procesando tu solicitud…";
+        elements.response.classList.add("processing");
+      } else if (state === "speaking") {
+        setListeningIndicator(false);
+        elements.response.classList.remove("processing");
+      } else if (state === "interrupted") {
+        setListeningIndicator(false);
+        elements.transcript.textContent = "Interrumpiendo…";
+      } else if (state === "idle") {
+        setListeningIndicator(false);
+        elements.response.classList.remove("processing");
+        const reason = event.payload.reason || "";
+        if (reason.includes("timeout")) elements.transcript.textContent = "No escuché ningún comando.";
+        else if (reason === "false_detection_reported") elements.transcript.textContent = "Detección falsa reportada para futuros entrenamientos.";
+        else if (!["completed", "tts_playback_completed", "response_without_speech"].includes(reason)) {
+          elements.transcript.textContent = "Esperando voz…";
+        }
+      }
     }
     if (event.type === "assistant.response.created") {
       elements.response.textContent = event.payload.text;
@@ -1685,13 +1477,6 @@ async function connect(generation = displaySocketGeneration) {
       elements["moon-icon"].setAttribute("aria-label", event.payload.moonPhase?.name || "Fase lunar");
       elements["moon-phase-name"].textContent = event.payload.moonPhase?.name || "Fase lunar";
     }
-    if (event.type === "music.playback.changed") {
-      const activeDestinationId = musicState?.activeDestinationId;
-      if (activeDestinationId && event.payload.destination?.id === activeDestinationId) {
-        playbackRequestGeneration += 1;
-        renderPlayback(event.payload);
-      }
-    }
   });
 }
 
@@ -1699,14 +1484,13 @@ enableTouchButtonActivation();
 document.querySelectorAll("[data-screen]").forEach((button) => button.addEventListener("click", async () => {
   showScreen(button.dataset.screen);
   if (button.dataset.screen === "settings-screen") {
-    await loadServers();
+    await loadServer();
     await Promise.all([loadAudio(), loadAssistantConfig(), loadMusicDestinations(), loadHomeDevices(), loadSystemInformation()]);
   }
   if (button.dataset.screen === "server-settings-screen") {
-    await loadServers();
+    await loadServer();
     await Promise.all([loadLocation(), loadLlmConfig(), loadMusicAssistantStatus()]);
   }
-  if (button.dataset.screen === "server-screen") await loadServers();
   if (button.dataset.screen === "assistant-screen") await loadAssistantConfig();
   if (button.dataset.screen === "voice-screen") await openVoices();
   if (button.dataset.screen === "location-screen") await loadLocation();
@@ -1714,7 +1498,6 @@ document.querySelectorAll("[data-screen]").forEach((button) => button.addEventLi
   if (button.dataset.screen === "music-destinations-screen") await loadMusicDestinations();
   if (button.dataset.screen === "music-sources-screen") await loadMusicDestinations();
   if (button.dataset.screen === "music-assistant-screen") await loadMusicAssistantStatus();
-  if (button.dataset.screen === "music-player-screen") { await loadAudio(); fillMusicPlayer(); }
   if (button.dataset.screen === "home-devices-screen") await loadHomeDevices();
   if (button.dataset.screen === "home-assistant-screen") await loadHomeDevices();
   if (button.dataset.screen === "system-info-screen") await loadSystemInformation();
@@ -1722,49 +1505,6 @@ document.querySelectorAll("[data-screen]").forEach((button) => button.addEventLi
 elements["refresh-system-info"].addEventListener("click", loadSystemInformation);
 document.querySelectorAll("[data-audio-kind]").forEach((button) => button.addEventListener("click", () => openAudio(button.dataset.audioKind)));
 elements["assistant-form"].addEventListener("submit", saveAssistantName);
-elements["wake-word-enabled"].addEventListener("change", renderWakeWordModelStatus);
-elements["wake-word-method"].addEventListener("change", () => {
-  const model = wakeWordModels.find((item) => item.id === selectedWakeWordModelId());
-  if (model) elements["assistant-name"].value = model.wakeWord;
-  renderWakeWordModelStatus();
-});
-elements["wake-word-model-update"].addEventListener("click", downloadSelectedWakeWordModel);
-elements["wake-word-training-open"].addEventListener("click", async () => {
-  clearManualTrainingSample();
-  elements["training-status"].textContent = "Desactivando temporalmente la detección de la wake word…";
-  try {
-    const response = await fetch(`${assistantApiUrl}/wake-word-training/session/start`, { method: "POST" });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.message || `HTTP ${response.status}`);
-    elements["training-status"].textContent = "Detector suspendido mientras permanezcas en esta pantalla.";
-    showScreen("wake-word-training-screen");
-  } catch (error) {
-    elements["assistant-status"].textContent = error.message;
-  }
-});
-elements["training-record-positive"].addEventListener("click", () => startManualTrainingRecording("positive"));
-elements["training-record-negative"].addEventListener("click", () => startManualTrainingRecording("negative"));
-elements["training-record-stop"].addEventListener("click", stopManualTrainingRecording);
-elements["training-sample-send"].addEventListener("click", sendManualTrainingSample);
-elements["training-sample-discard"].addEventListener("click", () => {
-  clearManualTrainingSample();
-  elements["training-status"].textContent = "Grabación descartada; no se envió al servidor.";
-});
-elements["training-force"].addEventListener("click", forceWakeWordTraining);
-elements["training-back"].addEventListener("click", async () => {
-  if (manualTrainingRecordingKind) await stopManualTrainingRecording();
-  clearManualTrainingSample();
-  elements["training-status"].textContent = "Reactivando el detector de la wake word…";
-  try {
-    const response = await fetch(`${assistantApiUrl}/wake-word-training/session/stop`, { method: "POST" });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.message || `HTTP ${response.status}`);
-    showScreen("assistant-screen");
-    elements["assistant-status"].textContent = "Detector de la wake word reactivado.";
-  } catch (error) {
-    elements["training-status"].textContent = `No se pudo reactivar el detector: ${error.message}`;
-  }
-});
 elements["connected-power-device-open"].addEventListener("click", () => openSelectionScreen({
   title: "Enchufe asociado",
   help: "Selecciona el enchufe que alimenta este satélite.",
@@ -1777,7 +1517,6 @@ elements["connected-power-device-open"].addEventListener("click", () => openSele
   }
 }));
 elements["manual-listen"].addEventListener("click", startManualListening);
-elements["report-false-detection"].addEventListener("click", reportFalseDetection);
 elements["location-form"].addEventListener("submit", saveLocation);
 elements["detect-location"].addEventListener("click", detectLocation);
 elements["llm-provider-open"].addEventListener("click", () => openSelectionScreen({
@@ -1800,12 +1539,7 @@ elements["home-assistant-form"].addEventListener("submit", saveHomeAssistantConn
 elements["home-assistant-test"].addEventListener("click", testHomeAssistantConnection);
 elements["home-assistant-delete-credential"].addEventListener("click", deleteHomeAssistantCredential);
 elements["discover-music-destinations"].addEventListener("click", () => loadMusicDestinations({ discover: true }));
-elements["discover-servers"].addEventListener("click", async () => {
-  elements["discover-servers"].disabled = true;
-  await loadServers({ refresh: true });
-  elements["discover-servers"].disabled = false;
-});
-elements["music-player-form"].addEventListener("submit", saveMusicPlayer);
+elements["voice-preview"].addEventListener("click", previewVoice);
 elements["music-assistant-form"].addEventListener("submit", connectMusicAssistant);
 elements["playback-previous"].addEventListener("click", () => runPlaybackCommand("previous"));
 elements["playback-toggle"].addEventListener("click", () => runPlaybackCommand(playbackSnapshot?.status === "playing" ? "pause" : "resume"));
@@ -1824,6 +1558,7 @@ document.addEventListener("visibilitychange", () => {
   if (!document.hidden) void loadCurrentPlayback();
 });
 window.addEventListener("focus", () => void loadCurrentPlayback());
+window.addEventListener("pagehide", () => { void browserAudio.stop(); });
 
 enableConfigurationDragScrolling();
 updateClock();
@@ -1832,12 +1567,15 @@ elements["playback-cover"].addEventListener("error", () => {
   elements["playback-cover"].classList.remove("visible");
   elements["playback-cover-placeholder"].classList.remove("hidden");
 });
-connectLocalEvents();
 void (async () => {
-  await Promise.all([loadLocalIdentity(), loadServers()]);
-  await loadMusicDestinations();
-  await loadCurrentPlayback();
+  await Promise.all([loadLocalIdentity(), loadServer()]);
   connect();
+  await Promise.all([
+    loadVoiceConfig({ quiet: true }),
+    loadMusicDestinations(),
+    loadCurrentPlayback()
+  ]);
+  void startBrowserAudio();
 })();
 setInterval(() => { if (!document.hidden) void loadCurrentPlayback(); }, 2_000);
 setInterval(() => { if (musicApiUrl) void loadMusicAssistantStatus(); }, 30_000);

@@ -1,0 +1,2 @@
+moonshine-voice==0.1.0
+psutil==7.2.2

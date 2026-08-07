@@ -1,5 +1,5 @@
 [Unit]
-Description=HA Voice Assistant Satellite
+Description=HA Satellite Sendspin Client
 Wants=network-online.target
 After=network-online.target user@@@SATELLITE_UID@@.service
 Requires=user@@@SATELLITE_UID@@.service
@@ -14,7 +14,7 @@ EnvironmentFile=/etc/ha/satellite.env
 Environment=XDG_RUNTIME_DIR=/run/user/@@SATELLITE_UID@@
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/@@SATELLITE_UID@@/bus
 Environment=PULSE_SERVER=unix:/run/user/@@SATELLITE_UID@@/pulse/native
-ExecStart=/usr/bin/node apps/satellite/src/index.js
+ExecStart=/opt/ha/current/deploy/start-sendspin.sh
 Restart=on-failure
 RestartSec=3
 

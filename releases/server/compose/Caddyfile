@@ -1,0 +1,4 @@
+{$SERVER_TLS_HOST:ha-server.local} {
+  tls internal
+  reverse_proxy 127.0.0.1:3000
+}

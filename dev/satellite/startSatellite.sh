@@ -2,29 +2,35 @@
 set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
-SATELLITE_PID_FILE="$SCRIPT_DIR/.satellite.pid"
-DISPLAY_PID_FILE="$SCRIPT_DIR/.display.pid"
-SATELLITE_LOG="$SCRIPT_DIR/satellite.log"
-DISPLAY_LOG="$SCRIPT_DIR/display.log"
+SENDSPIN_PID_FILE="$SCRIPT_DIR/.sendspin.pid"
+SENDSPIN_LOG="$SCRIPT_DIR/sendspin.log"
 
 set -a
 if [ -f /etc/ha/satellite.env ]; then
   . /etc/ha/satellite.env
-else
+elif [ -f "$SCRIPT_DIR/.env" ]; then
   . "$SCRIPT_DIR/.env"
 fi
 set +a
+
+SENDSPIN_CLIENT_ID=${SENDSPIN_ID:-ha-${SATELLITE_ID:-$(hostname)}}
+SENDSPIN_CLIENT_NAME=${SENDSPIN_NAME:-HA Satellite $(hostname)}
+SENDSPIN_SETTINGS=${SENDSPIN_SETTINGS_DIR:-$SCRIPT_DIR/.sendspin}
+SENDSPIN_LABEL_ID=$(printf '%s' "$SENDSPIN_CLIENT_ID" | tr -c 'A-Za-z0-9._-' '-')
+SENDSPIN_LAUNCHD_LABEL=${SENDSPIN_LAUNCHD_LABEL:-com.ha.sendspin.$SENDSPIN_LABEL_ID}
 
 ensure_sendspin() {
   CONFIGURED=${SENDSPIN_EXECUTABLE:-sendspin}
   if command -v "$CONFIGURED" >/dev/null 2>&1; then
     SENDSPIN_EXECUTABLE=$(command -v "$CONFIGURED")
-    export SENDSPIN_EXECUTABLE
+    return
+  fi
+  if [ -x "$CONFIGURED" ]; then
+    SENDSPIN_EXECUTABLE=$CONFIGURED
     return
   fi
   if [ "$CONFIGURED" != "sendspin" ]; then
-    echo "No se encontró SENDSPIN_EXECUTABLE=$CONFIGURED. Corrige la ruta o usa SENDSPIN_EXECUTABLE=sendspin para instalarlo automáticamente."
+    echo "No se encontró SENDSPIN_EXECUTABLE=$CONFIGURED."
     exit 1
   fi
 
@@ -37,80 +43,74 @@ ensure_sendspin() {
     elif [ -x "$TOOLS_BIN/uv" ]; then
       UV="$TOOLS_BIN/uv"
     else
-      if ! command -v curl >/dev/null 2>&1; then
-        echo "Se necesita curl para instalar uv y Sendspin automáticamente."
-        exit 1
-      fi
-      echo "uv no está instalado; instalando una copia local…"
+      command -v curl >/dev/null 2>&1 || { echo "Se necesita curl para instalar uv y Sendspin."; exit 1; }
+      echo "Instalando uv local…"
       UV_INSTALL_DIR="$TOOLS_BIN" UV_NO_MODIFY_PATH=1 sh -c "$(curl -LsSf https://astral.sh/uv/install.sh)"
       UV="$TOOLS_BIN/uv"
     fi
-    echo "Sendspin no está instalado; instalando una copia local con Python 3.12…"
+    echo "Instalando Sendspin local con Python 3.12…"
     UV_TOOL_BIN_DIR="$TOOLS_BIN" "$UV" tool install --python 3.12 sendspin
   fi
-  if [ ! -x "$SENDSPIN_LOCAL" ]; then
-    echo "La instalación terminó, pero no se encontró $SENDSPIN_LOCAL."
-    exit 1
-  fi
-  SENDSPIN_EXECUTABLE="$SENDSPIN_LOCAL"
-  export SENDSPIN_EXECUTABLE
-  echo "Sendspin disponible en $SENDSPIN_EXECUTABLE"
+  [ -x "$SENDSPIN_LOCAL" ] || { echo "No se encontró $SENDSPIN_LOCAL después de instalar."; exit 1; }
+  SENDSPIN_EXECUTABLE=$SENDSPIN_LOCAL
 }
+
+if [ "$(uname -s)" = Darwin ] && launchctl print "gui/$(id -u)/$SENDSPIN_LAUNCHD_LABEL" >/dev/null 2>&1; then
+  echo "Sendspin ya está ejecutándose mediante launchd ($SENDSPIN_LAUNCHD_LABEL)."
+  exit 0
+fi
+
+if [ -f "$SENDSPIN_PID_FILE" ]; then
+  SENDSPIN_PID=$(cat "$SENDSPIN_PID_FILE")
+  if kill -0 "$SENDSPIN_PID" 2>/dev/null; then
+    echo "Sendspin ya está ejecutándose (PID $SENDSPIN_PID)."
+    exit 0
+  fi
+  rm -f "$SENDSPIN_PID_FILE"
+fi
 
 ensure_sendspin
 
-ensure_openwakeword() {
-  PYTHON=${OPENWAKEWORD_PYTHON:-${VOSK_PYTHON:-dev/satellite/.venv/bin/python}}
-  case "$PYTHON" in
-    /*) ;;
-    *) PYTHON="$REPO_ROOT/$PYTHON" ;;
-  esac
-  if [ ! -x "$PYTHON" ]; then
-    echo "No se encontró el entorno Python del detector en $PYTHON."
-    exit 1
-  fi
-  if ! "$PYTHON" -c 'import numpy, onnxruntime, openwakeword' >/dev/null 2>&1; then
-    echo "Instalando openWakeWord y ONNX Runtime en el entorno del satélite…"
-    "$PYTHON" -m pip install -r "$REPO_ROOT/apps/satellite/requirements-wake-word.txt"
-  fi
-}
+mkdir -p "$SENDSPIN_SETTINGS"
 
-ensure_openwakeword
+set -- "$SENDSPIN_EXECUTABLE" daemon \
+  --id "$SENDSPIN_CLIENT_ID" \
+  --name "$SENDSPIN_CLIENT_NAME" \
+  --manufacturer "HA Voice Assistant" \
+  --product-name "Satellite Speaker" \
+  --settings-dir "$SENDSPIN_SETTINGS"
 
-if [ "${WAKE_WORD_PROVIDER:-vosk}" = "vosk" ]; then
-  cd "$REPO_ROOT"
-  if [ ! -x "${VOSK_PYTHON:-dev/satellite/.venv/bin/python}" ]; then
-    echo "No se encontró el entorno Python de Vosk en ${VOSK_PYTHON:-dev/satellite/.venv/bin/python}."
-    exit 1
-  fi
-  if [ ! -d "${VOSK_MODEL_PATH:-dev/satellite/models/vosk-model-small-es-0.42}" ]; then
-    echo "No se encontró el modelo Vosk en ${VOSK_MODEL_PATH:-dev/satellite/models/vosk-model-small-es-0.42}."
-    exit 1
-  fi
+if [ -n "${MUSIC_ASSISTANT_SENDSPIN_URL:-}" ]; then
+  set -- "$@" --url "$MUSIC_ASSISTANT_SENDSPIN_URL"
+fi
+if [ -n "${SENDSPIN_AUDIO_DEVICE:-}" ]; then
+  set -- "$@" --audio-device "$SENDSPIN_AUDIO_DEVICE"
+fi
+if [ -n "${SENDSPIN_INTERFACE:-}" ]; then
+  set -- "$@" --interface "$SENDSPIN_INTERFACE"
 fi
 
-start_process() {
-  NAME=$1
-  PID_FILE=$2
-  LOG_FILE=$3
-  shift 3
-
-  if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
-    echo "$NAME ya está ejecutándose (PID $(cat "$PID_FILE"))."
-    return
-  fi
-
-  cd "$REPO_ROOT"
-  nohup "$@" >>"$LOG_FILE" 2>&1 &
-  PID=$!
-  printf '%s\n' "$PID" >"$PID_FILE"
+if [ "$(uname -s)" = Darwin ]; then
+  launchctl submit -l "$SENDSPIN_LAUNCHD_LABEL" -o "$SENDSPIN_LOG" -e "$SENDSPIN_LOG" -- "$@"
   sleep 1
-  if ! kill -0 "$PID" 2>/dev/null; then
-    echo "$NAME no pudo iniciarse. Revisa $LOG_FILE"
+  SENDSPIN_PID=$(launchctl print "gui/$(id -u)/$SENDSPIN_LAUNCHD_LABEL" \
+    | sed -n 's/^[[:space:]]*pid = \([0-9][0-9]*\)$/\1/p' | head -n 1)
+  if [ -z "$SENDSPIN_PID" ]; then
+    launchctl remove "$SENDSPIN_LAUNCHD_LABEL" 2>/dev/null || true
+    echo "Sendspin no pudo iniciarse mediante launchd. Revisa $SENDSPIN_LOG"
     exit 1
   fi
-  echo "$NAME iniciado (PID $PID). Log: $LOG_FILE"
-}
+else
+  nohup "$@" >>"$SENDSPIN_LOG" 2>&1 &
+  SENDSPIN_PID=$!
+fi
+printf '%s\n' "$SENDSPIN_PID" > "$SENDSPIN_PID_FILE"
+sleep 1
+if ! kill -0 "$SENDSPIN_PID" 2>/dev/null; then
+  [ "$(uname -s)" != Darwin ] || launchctl remove "$SENDSPIN_LAUNCHD_LABEL" 2>/dev/null || true
+  rm -f "$SENDSPIN_PID_FILE"
+  echo "Sendspin no pudo iniciarse. Revisa $SENDSPIN_LOG"
+  exit 1
+fi
 
-start_process "Satélite" "$SATELLITE_PID_FILE" "$SATELLITE_LOG" node apps/satellite/src/index.js
-start_process "Display" "$DISPLAY_PID_FILE" "$DISPLAY_LOG" "$REPO_ROOT/node_modules/.bin/serve" apps/display/public -l "${DISPLAY_PORT:-8080}"
+echo "Sendspin iniciado (PID $SENDSPIN_PID). Log: $SENDSPIN_LOG"

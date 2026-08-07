@@ -12,7 +12,7 @@
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "dev:server": "npm run dev --workspace @ha/server",
-    "dev:satellite": "npm run dev --workspace @ha/satellite",
+    "dev:satellite": "./dev/satellite/startSatellite.sh",
     "dev:display": "npm run dev --workspace @ha/display",
     "dev:music": "npm run dev --workspace @ha/music-gateway",
     "start": "npm run start --workspace @ha/server",

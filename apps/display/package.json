@@ -2,10 +2,11 @@
   "name": "@ha/display",
   "version": "0.1.22",
   "private": true,
+  "type": "module",
   "scripts": {
-    "dev": "serve public -l 8080",
-    "start": "serve public -l 8080",
-    "check": "node --check public/app.js"
-  },
-  "devDependencies": { "serve": "^14.2.4" }
+    "dev": "node -e \"console.log('El display se sirve desde @ha/server en su URL raíz')\"",
+    "start": "node -e \"console.log('El display se sirve desde @ha/server en su URL raíz')\"",
+    "check": "node --check public/app.js && node --check public/browser-identity.js && node --check public/music-artwork.js && node --check public/audio/browser-audio-controller.js && node --check public/audio/voice-transport.worker.js && node --check public/audio/capture-worklet.js && node --check public/audio/playback-worklet.js",
+    "test": "node --test public/*.test.js public/audio/*.test.js"
+  }
 }

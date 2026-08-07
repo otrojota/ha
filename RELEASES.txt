@@ -1,116 +1,29 @@
-GENERACIÓN DE RELEASES
-======================
+RELEASES
+========
 
-Los artefactos se generan usando los scripts existentes. No es necesario
-ejecutar manualmente las operaciones internas de copiado, empaquetado ni
-checksum.
+Manifiestos:
 
-Ejecuta siempre los comandos desde la raíz del repositorio y asegúrate de
-tener Node.js instalado. Es recomendable validar primero el proyecto:
+    releases/server/manifest.json
+    releases/satellite/manifest.json
 
-  npm test
-  npm run check
+Construcción:
 
+    ./releases/server/package.sh
+    ./releases/satellite/package.sh
 
-RELEASE DEL SERVIDOR
---------------------
+Los artefactos y sus checksums se generan en `releases/dist/`.
 
-El script toma por defecto la versión de releases/server/manifest.json:
+El artefacto del servidor contiene `apps/server`, `apps/display`, Music Gateway
+y los paquetes compartidos. El artefacto del satélite contiene únicamente el
+arranque de Chromium Kiosk, el servicio Sendspin y sus instaladores; no empaqueta
+aplicaciones Node ni una copia del display.
 
-  ./releases/server/package.sh
+Los tags esperados son:
 
-También se puede indicar una versión explícitamente:
+    server-vX.Y.Z
+    satellite-vX.Y.Z
 
-  ./releases/server/package.sh 0.1.18
+Antes de publicar, ejecutar:
 
-El artefacto se genera para la arquitectura de la máquina donde se ejecuta
-el script. En una máquina ARM64 produce:
-
-  releases/dist/ha-server-0.1.18-linux-arm64.tar.gz
-  releases/dist/ha-server-0.1.18-linux-arm64.tar.gz.sha256
-
-En una máquina x86_64 produce el sufijo linux-x64. Para obtener las dos
-arquitecturas hay que ejecutar el script en una máquina de cada arquitectura.
-
-
-RELEASE DEL SATÉLITE
---------------------
-
-El script toma por defecto la versión de releases/satellite/manifest.json:
-
-  ./releases/satellite/package.sh
-
-También se puede indicar una versión explícitamente:
-
-  ./releases/satellite/package.sh 0.1.22
-
-El satélite tiene como destino Raspberry Pi OS de 64 bits, por lo que genera:
-
-  releases/dist/ha-satellite-0.1.22-linux-arm64.tar.gz
-  releases/dist/ha-satellite-0.1.22-linux-arm64.tar.gz.sha256
-
-
-VERIFICACIÓN
-------------
-
-Para comprobar todos los checksums generados desde la raíz:
-
-  cd releases/dist
-  shasum -a 256 -c ha-server-0.1.18-linux-arm64.tar.gz.sha256
-  shasum -a 256 -c ha-satellite-0.1.22-linux-arm64.tar.gz.sha256
-
-En Linux con sha256sum también se puede usar:
-
-  cd releases/dist
-  sha256sum -c ha-server-0.1.18-linux-arm64.tar.gz.sha256
-  sha256sum -c ha-satellite-0.1.22-linux-arm64.tar.gz.sha256
-
-Los scripts recrean únicamente el directorio de trabajo de la versión que se
-está generando y escriben los resultados en releases/dist/. No eliminan los
-artefactos de versiones anteriores.
-
-Al instalar un artefacto, install-release.sh activa el release nuevo y elimina
-los directorios de releases instalados anteriormente. No se conserva una copia
-para rollback en /opt/ha/releases.
-
-
-DESPLIEGUE REMOTO SEGURO
-------------------------
-
-Con los alias SSH ha-server y ha-satellite configurados, instala una sola vez
-los wrappers restringidos desde una terminal interactiva del Mac:
-
-  ./scripts/install-deploy-wrappers.sh
-
-Fedora solicitará la contraseña de sudo durante esta instalación inicial. El
-script instala wrappers propiedad de root y reglas sudoers que autorizan sólo
-estos dos comandos sin contraseña:
-
-  /usr/local/sbin/ha-deploy-server
-  /usr/local/sbin/ha-deploy-satellite
-
-Después, para desplegar el único release presente de cada componente:
-
-  ./scripts/deploy-server.sh
-  ./scripts/deploy-satellite.sh
-
-Si se conserva más de un artefacto del satélite para una prueba o rollback,
-indica explícitamente la versión que se debe instalar:
-
-  ./scripts/deploy-satellite.sh 0.1.26
-
-Para volver a una versión respaldada se usa el mismo comando con su versión:
-
-  ./scripts/deploy-satellite.sh 0.1.25
-
-Cada script copia el artefacto a una ruta fija, envía su SHA-256, ejecuta el
-wrapper sin argumentos arbitrarios y finalmente ejecuta el health check. Los
-wrappers validan propietario, checksum, raíz del archivo y rutas del tar antes
-de extraer e instalar como root.
-
-Al instalar un release del satélite, el instalador reinicia ha-display y
-ha-satellite, termina los procesos Chromium del usuario del satélite y vuelve
-a ejecutar /opt/ha/current/deploy/kiosk-start.sh dentro de la sesión Wayland
-activa. No reinicia la Raspberry. Si todavía no existe una sesión Wayland (por
-ejemplo durante la primera instalación), el kiosco queda pendiente para el
-próximo inicio de sesión o reinicio.
+    npm run check
+    npm test

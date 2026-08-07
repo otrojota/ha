@@ -6,8 +6,9 @@ if [ -f /etc/ha/satellite.env ]; then
   . /etc/ha/satellite.env
   set +a
 fi
-PORT=${DISPLAY_PORT:-8080}
-until curl -fsS "http://127.0.0.1:$PORT/" >/dev/null 2>&1; do
+
+SERVER_URL=${SERVER_URL:-http://ha-server:3000}
+until curl -fsS "$SERVER_URL/health" >/dev/null 2>&1; do
   sleep 1
 done
 
@@ -17,8 +18,9 @@ exec chromium \
   --disable-infobars \
   --no-first-run \
   --disable-session-crashed-bubble \
+  --autoplay-policy=no-user-gesture-required \
   --lang=es-CL \
-  --disable-features=Translate,TranslateUI \
+  --disable-features=Translate,TranslateUI,WebRtcPipeWireCamera \
   --password-store=basic \
   --ozone-platform=wayland \
-  "http://localhost:$PORT"
+  "$SERVER_URL/"

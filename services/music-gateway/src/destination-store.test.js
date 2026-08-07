@@ -56,6 +56,15 @@ test("mantiene un destino activo independiente para cada satélite", async () =>
   assert.equal(store.decorate(players, "satellite-mac")[1].active, true);
 });
 
+test("no elige automáticamente un parlante en la primera ejecución", async () => {
+  const store = new DestinationStore("/tmp/unused-music-store.json");
+  store.save = async () => {};
+
+  assert.equal(store.resolve(players, undefined, "satellite-new"), null);
+  await store.setActive(players, "Sonos", "satellite-new");
+  assert.equal(store.resolve(players, undefined, "satellite-new").id, "sonos:living");
+});
+
 test("conserva y resuelve el origen activo por nombre", async () => {
   const store = new DestinationStore("/tmp/unused-music-store.json");
   store.save = async () => {};
@@ -93,7 +102,7 @@ test("resuelve orígenes por transcripciones normalizadas y difusas", () => {
   assert.equal(store.resolveSource(sources, "tid all", "satellite-test").id, "tidal--home");
 });
 
-test("rechaza el estado global de versiones anteriores", async () => {
+test("rechaza un estado global con esquema incorrecto", async () => {
   const path = `/tmp/ha-music-store-${process.pid}-${Date.now()}.json`;
   await mkdir("/tmp", { recursive: true });
   await writeFile(path, JSON.stringify({ activeDestinationId: "old", activeDestinationIds: {}, activeSourceIds: {} }));

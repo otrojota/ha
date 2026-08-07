@@ -21,7 +21,7 @@
         </header>
         <div class="home-content row g-4 my-auto">
           <div class="col-md-6"><article class="panel playback-panel p-4 h-100"><div class="playback-cover-wrap"><img id="playback-cover" class="playback-cover" alt="Portada de la reproducción actual"><div id="playback-cover-placeholder" class="playback-cover-placeholder" aria-hidden="true">♫</div></div><div class="playback-info"><div class="text-secondary">Reproducción actual</div><h2 id="track">Sin reproducción</h2><div id="playback-artists" class="playback-artists"></div><div id="playback-album" class="playback-album"></div><div id="device" class="playback-device">Dispositivo: --</div><div class="playback-progress" aria-label="Progreso"><div id="playback-progress-bar"></div></div><div id="playback-time" class="playback-time"></div><div class="playback-volume"><span aria-hidden="true">🔈</span><input id="playback-volume" type="range" min="0" max="100" step="1" value="50" aria-label="Volumen del destino activo" disabled><output id="playback-volume-value" for="playback-volume">--</output></div><div class="playback-controls" aria-label="Controles de reproducción"><button id="playback-previous" class="playback-control" type="button" aria-label="Canción anterior">◀▮</button><button id="playback-toggle" class="playback-control primary" type="button" aria-label="Reproducir" disabled>▶</button><button id="playback-next" class="playback-control" type="button" aria-label="Siguiente canción">▮▶</button></div><div id="playback-controls-status" class="playback-controls-status" role="status" aria-live="polite"></div></div></article></div>
-          <div class="col-md-6"><article id="conversation-panel" class="panel conversation-panel p-4 h-100"><div class="conversation-heading"><div class="text-secondary">Conversación</div><div class="listening-actions"><button id="report-false-detection" class="false-detection-button" type="button" hidden>Reportar detección falsa</button><div id="listening-indicator" class="listening-indicator" role="status" aria-live="assertive" aria-hidden="true"><span class="listening-mic" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a6 6 0 0 1-12 0M12 18v3m-3 0h6"/></svg></span><span id="listening-label">Te escucho</span></div></div></div><p id="transcript" class="fs-5">Esperando voz…</p><p id="response" class="fs-3" role="status" aria-live="polite">Hola, estoy listo.</p><div class="audio-meter" aria-label="Nivel del micrófono"><div class="audio-meter-header"><span>Micrófono</span><span id="audio-level-db">−60 dB</span></div><div class="audio-meter-track"><div id="audio-level-bar" class="audio-meter-bar"></div><div id="audio-level-peak" class="audio-meter-peak"></div></div></div></article></div>
+          <div class="col-md-6"><article id="conversation-panel" class="panel conversation-panel p-4 h-100"><div class="conversation-heading"><div class="text-secondary">Conversación</div><div class="listening-actions"><div id="listening-indicator" class="listening-indicator" role="status" aria-live="assertive" aria-hidden="true"><span class="listening-mic" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a6 6 0 0 1-12 0M12 18v3m-3 0h6"/></svg></span><span id="listening-label">Te escucho</span></div></div></div><p id="transcript" class="fs-5">Esperando voz…</p><p id="response" class="fs-3" role="status" aria-live="polite">Hola, estoy listo.</p><div class="audio-meter" aria-label="Nivel del micrófono"><div class="audio-meter-header"><span>Micrófono</span><span id="audio-level-db">−60 dB</span></div><div class="audio-meter-track"><div id="audio-level-bar" class="audio-meter-bar"></div><div id="audio-level-peak" class="audio-meter-peak"></div></div></div></article></div>
         </div>
       </section>
 
@@ -53,13 +53,12 @@
             <div class="settings-list">
               <button class="setting-card" data-audio-kind="input"><span class="setting-icon">🎙</span><span><strong>Audio de entrada</strong><small id="input-summary">Sin configurar</small></span><span class="chevron">›</span></button>
               <button class="setting-card" data-audio-kind="output"><span class="setting-icon">🔊</span><span><strong>Audio de salida</strong><small id="output-summary">Sin configurar</small></span><span class="chevron">›</span></button>
-              <button class="setting-card" data-screen="music-player-screen"><span class="setting-icon">♫</span><span><strong>Parlante Music Assistant</strong><small id="music-player-summary">Cargando…</small></span><span class="chevron">›</span></button>
             </div>
           </section>
           <section class="settings-group" aria-labelledby="system-settings-title">
             <h2 id="system-settings-title">Sistema</h2>
             <div class="settings-list">
-              <button class="setting-card" data-screen="server-settings-screen"><span class="setting-icon">🖥</span><span><strong>Configurar servidor</strong><small id="server-summary">Buscando…</small></span><span class="chevron">›</span></button>
+              <button class="setting-card" data-screen="server-settings-screen"><span class="setting-icon">🖥</span><span><strong>Configurar servidor</strong><small id="server-summary">Conectando…</small></span><span class="chevron">›</span></button>
               <button class="setting-card" data-screen="system-info-screen"><span class="setting-icon">ⓘ</span><span><strong>Información del satélite</strong><small id="system-info-summary">Cargando…</small></span><span class="chevron">›</span></button>
             </div>
           </section>
@@ -68,9 +67,8 @@
 
       <section id="server-settings-screen" class="screen">
         <header class="screen-header"><button class="back-button" data-screen="settings-screen">‹</button><div><div class="eyebrow">Servidor</div><h1>Configuración del servidor</h1></div></header>
-        <p class="text-secondary fs-5">Estas opciones se comparten con los satélites que usan el servidor seleccionado.</p>
+        <p class="text-secondary fs-5">Esta aplicación fue descargada desde el servidor que administra estas opciones.</p>
         <div class="settings-list">
-          <button class="setting-card" data-screen="server-screen"><span class="setting-icon">🔗</span><span><strong>Servidor seleccionado</strong><small>Descubrimiento y conexión</small></span><span class="chevron">›</span></button>
           <button class="setting-card" data-screen="llm-screen"><span class="setting-icon">🧠</span><span><strong>Modelo de lenguaje</strong><small id="llm-summary">Cargando…</small></span><span class="chevron">›</span></button>
           <button class="setting-card" data-screen="location-screen"><span class="setting-icon">📍</span><span><strong>Ubicación</strong><small id="location-summary">Sin configurar</small></span><span class="chevron">›</span></button>
           <button class="setting-card" data-screen="music-assistant-screen"><span class="setting-icon">♫</span><span><strong>Music Assistant</strong><small id="music-assistant-summary">Comprobando…</small></span><span class="chevron">›</span></button>
@@ -85,17 +83,9 @@
         <div class="destination-actions mt-3"><button id="refresh-system-info" class="save-button secondary" type="button">Actualizar información</button></div>
       </section>
 
-      <section id="server-screen" class="screen">
-        <header class="screen-header"><button class="back-button" data-screen="server-settings-screen">‹</button><div><div class="eyebrow">Sistema</div><h1>Seleccionar servidor</h1></div></header>
-        <p class="text-secondary fs-5">Los servidores disponibles se descubren automáticamente en la red local. Si sólo hay uno, se selecciona sin intervención.</p>
-        <div class="destination-actions"><button id="discover-servers" class="save-button secondary" type="button">Buscar nuevamente</button></div>
-        <div id="server-status" class="status-message mt-3" role="status"></div>
-        <div id="server-list" class="device-list"></div>
-      </section>
-
       <section id="assistant-screen" class="screen">
         <header class="screen-header"><button class="back-button" data-screen="settings-screen">‹</button><div><div class="eyebrow">Asistente</div><h1>Nombre y activación</h1></div></header>
-        <p class="text-secondary fs-5">Con Vosk, el nombre debe existir en el vocabulario español. Al seleccionar un modelo entrenado se usará automáticamente la frase definida por ese modelo.</p>
+        <p class="text-secondary fs-5">Whisper escucha continuamente en español. Cuando reconoce este nombre, lo que sigue se convierte en el comando.</p>
         <form id="assistant-form" class="assistant-form">
           <label for="assistant-name" class="form-label fs-5">Nombre o frase de activación</label>
           <input id="assistant-name" class="assistant-name-input" name="name" type="text" minlength="2" maxlength="40" autocomplete="off" required>
@@ -103,48 +93,9 @@
           <input id="connected-power-device" name="connectedPowerDeviceId" type="hidden">
           <button id="connected-power-device-open" class="selection-trigger" type="button"><span><strong id="connected-power-device-label">Ninguno</strong><small>Seleccionar enchufe asociado</small></span><span class="chevron">›</span></button>
           <label class="switch-row"><span><strong>Activación por nombre</strong><small>Escucha continuamente la palabra de activación. Desactívala para ahorrar CPU y memoria; el botón de micrófono seguirá disponible.</small></span><input id="wake-word-enabled" type="checkbox" role="switch" checked></label>
-          <div id="wake-word-method-fields" class="wake-word-method-fields">
-            <label for="wake-word-method" class="form-label fs-5">Método de detección</label>
-            <select id="wake-word-method" class="assistant-name-input">
-              <option value="vosk">Vosk — método actual</option>
-            </select>
-            <label class="switch-row"><span><strong>Modo entrenamiento</strong><small>Envía activaciones confirmadas y detecciones falsas al servidor para mejorar automáticamente este modelo.</small></span><input id="wake-word-training-mode" type="checkbox" role="switch"></label>
-            <div id="wake-word-model-status" class="status-message" role="status"></div>
-            <button id="wake-word-model-update" class="save-button secondary" type="button" hidden>Descargar actualización</button>
-            <button id="wake-word-training-open" class="selection-trigger" type="button"><span><strong>Agregar muestras manualmente</strong><small>Grabar positivos y negativos, revisar el audio y solicitar entrenamiento</small></span><span class="chevron">›</span></button>
-          </div>
           <button class="save-button" type="submit">Validar y guardar</button>
         </form>
         <div id="assistant-status" class="status-message mt-3" role="status"></div>
-      </section>
-
-      <section id="wake-word-training-screen" class="screen">
-        <header class="screen-header"><button id="training-back" class="back-button" type="button">‹</button><div><div class="eyebrow">Modelo de activación</div><h1>Entrenamiento manual</h1></div></header>
-        <p class="text-secondary fs-5">Las muestras se graban con el micrófono configurado en este satélite. Puedes escucharlas y confirmarlas antes de enviarlas; este flujo es independiente del modo de aprendizaje automático.</p>
-        <div class="training-panel">
-          <div class="audio-meter training-audio-meter" aria-label="Nivel del micrófono">
-            <div class="audio-meter-header"><span>Volumen del micrófono</span><span id="training-audio-level-db">−60 dB</span></div>
-            <div class="audio-meter-track"><div id="training-audio-level-bar" class="audio-meter-bar"></div><div id="training-audio-level-peak" class="audio-meter-peak"></div></div>
-          </div>
-          <div class="training-record-actions">
-            <button id="training-record-positive" class="save-button" type="button">Grabar positiva</button>
-            <button id="training-record-negative" class="save-button secondary" type="button">Grabar negativa</button>
-          </div>
-          <button id="training-record-stop" class="save-button danger" type="button" hidden>Detener grabación</button>
-          <div id="training-review" class="training-review" hidden>
-            <strong id="training-review-title">Revisar grabación</strong>
-            <audio id="training-review-audio" controls></audio>
-            <p>¿Quieres enviar esta muestra al servidor?</p>
-            <div class="training-record-actions">
-              <button id="training-sample-send" class="save-button" type="button">Sí, enviar</button>
-              <button id="training-sample-discard" class="save-button secondary" type="button">Descartar</button>
-            </div>
-          </div>
-          <div id="training-status" class="status-message" role="status"></div>
-          <hr class="settings-divider">
-          <p class="text-secondary">El entrenamiento se ejecutará en el servidor con todas las muestras almacenadas para el modelo seleccionado.</p>
-          <button id="training-force" class="save-button" type="button">Forzar entrenamiento ahora</button>
-        </div>
       </section>
 
       <section id="audio-screen" class="screen">
@@ -163,21 +114,10 @@
 
       <section id="voice-screen" class="screen">
         <header class="screen-header"><button class="back-button" data-screen="settings-screen">‹</button><div><div class="eyebrow">Voz</div><h1>Voz del asistente</h1></div></header>
-        <p class="text-secondary fs-5">Las voces se generan localmente en este satélite y se reproducen por su salida de voz configurada.</p>
+        <p class="text-secondary fs-5">La voz se configura para este satélite, pero el servidor genera y transmite el audio en tiempo real.</p>
         <div id="voice-status" class="status-message" role="status"></div>
         <div id="voice-list" class="device-list"></div>
-      </section>
-
-      <section id="music-player-screen" class="screen">
-        <header class="screen-header"><button class="back-button" data-screen="settings-screen">‹</button><div><div class="eyebrow">Audio</div><h1>Parlante Music Assistant</h1></div></header>
-        <p class="text-secondary fs-5">El satélite se anuncia en Music Assistant mediante Sendspin. Esta salida es independiente de la voz TTS.</p>
-        <form id="music-player-form" class="destination-form">
-          <label>Dispositivo de salida Sendspin<input id="music-player-output" type="hidden"></label>
-          <div id="music-player-output-list" class="device-list compact-list" aria-label="Dispositivo de salida Sendspin"></div>
-          <label class="switch-row"><span><strong>Exponer este satélite</strong><small>Permite que Music Assistant lo use como destino.</small></span><input id="music-player-enabled" type="checkbox" role="switch"></label>
-          <button class="save-button" type="submit">Guardar y reiniciar reproductor</button>
-        </form>
-        <div id="music-player-status" class="status-message mt-3" role="status"></div>
+        <button id="voice-preview" class="btn btn-primary btn-lg mt-3" type="button">Probar voz</button>
       </section>
 
       <section id="location-screen" class="screen">
@@ -273,6 +213,6 @@
 
     </main>
     <script src="virtual-keyboard.js"></script>
-    <script src="app.js"></script>
+    <script type="module" src="app.js"></script>
   </body>
 </html>

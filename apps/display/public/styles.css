@@ -33,8 +33,6 @@ button { touch-action: manipulation; }
 .conversation-panel { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
 .conversation-heading { display: flex; min-height: 3rem; align-items: center; justify-content: space-between; gap: .75rem; }
 .listening-actions { display: flex; align-items: center; justify-content: flex-end; gap: .65rem; }
-.false-detection-button { padding: .5rem .8rem; color: #ffe8e8; background: rgba(164,38,48,.68); border: 1px solid rgba(255,130,138,.72); border-radius: .75rem; font-weight: 750; }
-.false-detection-button:disabled { opacity: .55; }
 .listening-indicator { display: flex; align-items: center; gap: .55rem; padding: .45rem .85rem; opacity: 0; color: #06130c; background: #58f59a; border: 1px solid #9affc4; border-radius: 999px; box-shadow: 0 0 0 0 rgba(88,245,154,.55); font-weight: 800; transform: scale(.9); transition: opacity .15s, transform .15s; pointer-events: none; }
 .listening-indicator.active { opacity: 1; transform: scale(1); animation: listening-pulse 1.25s ease-out infinite; }
 .listening-mic { display: grid; width: 1.65rem; height: 1.65rem; place-items: center; border-radius: 50%; background: rgba(3,35,18,.12); }
@@ -92,13 +90,6 @@ button { touch-action: manipulation; }
 .selected .selection-mark { background: #397ee5; border-color: #69a5ff; }
 .status-message { min-height: 2rem; margin-bottom: .7rem; color: #9fc1ff; font-weight: 600; }
 .assistant-form { display: grid; gap: 1rem; width: min(100%, 700px); margin: auto; }
-.wake-word-method-fields { display: grid; gap: .75rem; }
-.training-panel { display: grid; gap: 1rem; width: min(100%, 760px); margin: 0 auto 2rem; padding: 1.25rem; border: 1px solid rgba(255,255,255,.14); border-radius: 1.2rem; background: rgba(255,255,255,.05); }
-.training-audio-meter { margin: 0 0 .5rem; padding: 0; }
-.training-record-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
-.training-review { display: grid; gap: .8rem; padding: 1rem; border: 1px solid rgba(105,165,255,.45); border-radius: 1rem; background: rgba(61,130,235,.12); }
-.training-review audio { width: 100%; }
-.training-review p { margin: 0; color: #dce6f5; }
 .location-form { display: grid; gap: .8rem; width: min(100%, 850px); margin: 0 auto; }
 .location-form label { color: #aeb8c7; font-weight: 600; }
 .location-form .assistant-name-input { min-height: 4.2rem; margin-top: .3rem; font-size: 1.3rem; }
@@ -193,7 +184,6 @@ button { touch-action: manipulation; }
   .conversation-panel #transcript { margin: .2rem 0 .65rem; font-size: 1rem !important; line-height: 1.25; }
   .conversation-heading { min-height: 2.15rem; }
   .listening-actions { gap: .35rem; }
-  .false-detection-button { padding: .34rem .5rem; font-size: .72rem; }
   .listening-indicator { gap: .35rem; padding: .28rem .6rem; font-size: .78rem; }
   .listening-mic { width: 1.3rem; height: 1.3rem; }
   .listening-mic svg { width: .9rem; height: .9rem; }

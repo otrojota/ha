@@ -6,8 +6,8 @@ COPY packages/contracts/package.json packages/contracts/package.json
 COPY packages/shared/package.json packages/shared/package.json
 RUN npm install --omit=dev --workspace @ha/server --include-workspace-root
 COPY apps/server apps/server
+COPY apps/display/public apps/display/public
 COPY packages/contracts packages/contracts
 COPY packages/shared packages/shared
 EXPOSE 3000
 CMD ["npm", "run", "start", "--workspace", "@ha/server"]
-

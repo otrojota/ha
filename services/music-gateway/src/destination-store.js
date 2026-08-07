@@ -96,7 +96,7 @@ export class DestinationStore {
   }
   resolve(players, query, scope) {
     const decorated = this.decorate(players, scope);
-    if (!query) return decorated.find((player) => player.active) || decorated.find((player) => player.available) || decorated[0] || null;
+    if (!query) return decorated.find((player) => player.active) || null;
     const exactId = decorated.find((player) => String(player.id) === String(query));
     if (exactId) return exactId;
     const match = resolveByLabels(decorated, query, (player) => [player.name], "destino");

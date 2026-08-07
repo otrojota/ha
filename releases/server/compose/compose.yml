@@ -1,4 +1,16 @@
 services:
+  caddy:
+    image: ${CADDY_IMAGE:-caddy:2.11.4-alpine}
+    container_name: ha-caddy
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      SERVER_TLS_HOST: ${SERVER_TLS_HOST:-ha-server.local}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - /var/lib/ha/caddy/data:/data
+      - /var/lib/ha/caddy/config:/config
+
   searxng:
     image: searxng/searxng:2026.7.10-4abac08de
     container_name: ha-searxng

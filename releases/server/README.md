@@ -4,7 +4,7 @@ Esta carpeta contiene la receta de distribución del servidor. Los artefactos ge
 
 ## Bootstrap Fedora y Raspberry Pi OS Lite
 
-`install.sh` soporta Fedora estándar en `x86_64` y `aarch64`, incluida Fedora Asahi Remix, y Raspberry Pi OS Lite de 64 bits en `aarch64`. La detección de Asahi es informativa: se usan paquetes Fedora y binarios ARM64 nativos, sin emulación x86. Raspberry Pi OS de 32 bits se rechaza porque no existe un artefacto `armv7`.
+`install.sh` soporta Fedora estándar en `x86_64` y `aarch64`, incluida Fedora Asahi Remix, y Raspberry Pi OS Lite de 64 bits en `aarch64`. En Asahi instala Honeykrisp/Vulkan y compila `whisper.cpp` como binario ARM64 nativo con aceleración de la GPU Apple, sin emulación x86. Raspberry Pi OS de 32 bits se rechaza porque no existe un artefacto `armv7`.
 
 Cuando exista la GitHub Release `vX.Y.Z`:
 
@@ -47,21 +47,64 @@ El resultado contiene el backend, Music Gateway, dependencias de workspace y los
 
 ## Instalar el artefacto
 
-El instalador de la release supone que Node, npm, Docker Compose y `whisper-cli` ya están instalados. Ollama sólo es necesario cuando se elige como proveedor local. Esa preparación corresponderá al bootstrap público.
+El instalador de la release supone que Node, npm y Docker Compose ya están
+instalados. Si falta `whisper-server`, compila la versión requerida de
+whisper.cpp antes de detener los servicios. Ollama sólo es necesario cuando se
+elige como proveedor local.
 
 ```bash
 tar -xzf ha-server-X.Y.Z-linux-ARCH.tar.gz
 sudo ./ha-server-X.Y.Z/install-release.sh
 ```
 
-La instalación crea una release inmutable en `/opt/ha/releases/<version>`, conserva `/etc/ha/server.env` si ya existe y usa `/var/lib/ha` para datos y modelos.
+La instalación crea una release inmutable en `/opt/ha/releases/<version>`, conserva `/etc/ha/server.env` si ya existe y usa `/var/lib/ha` para datos y modelos. Kokoro se instala como único motor de voz central en `/opt/ha/venvs/kokoro`. Los satélites reproducen el PCM TTS y transmiten PCM de micrófono por el WebSocket del protocolo 5; el servidor delimita la frase y ejecuta Whisper.
 
-Después de copiar el modelo Whisper a `/var/lib/ha/models/whisper/ggml-small.bin`:
+El display se publica por HTTPS mediante Caddy y una CA local. El hostname se
+configura con `SERVER_TLS_HOST` (por defecto, el hostname del servidor con
+`.local`). Para que navegadores y teléfonos habiliten micrófono y selección de
+salida, instala una vez `/var/lib/ha/caddy-root.crt` como autoridad raíz de
+confianza en cada dispositivo cliente y abre `https://SERVER_TLS_HOST`.
+
+`GET /health` informa `activeVoiceInputStreams`. Las métricas acumuladas de
+frames, pérdidas y latencia se escriben en el journal con el intervalo
+`VOICE_INPUT_METRICS_INTERVAL_MS`. Cada sesión mantiene un ring buffer PCM
+acotado por `VOICE_INPUT_RING_BUFFER_MS` y lo reinicia ante discontinuidades
+mayores que `VOICE_INPUT_DISCONTINUITY_MS`. `GET /voice/input/sessions` permite
+revisar ocupación, continuidad y estado sin exponer el audio.
+
+Whisper reconoce continuamente la frase configurada para cada satélite y el
+comando posterior, sin un modelo adicional de wake word. Las transcripciones
+parciales llegan al display y una pausa cierra y aplica el comando.
+
+El servidor es además la autoridad del estado conversacional. Publica
+`voice.state.changed`, asigna `activationId` y controla timeouts configurables
+con `VOICE_STATE_LISTENING_TIMEOUT_MS`. `GET /voice/states` muestra el estado de
+cada satélite. La reproducción TTS se cierra sólo al recibir la confirmación
+real del satélite.
+
+El VAD y STT se configuran con `VOICE_*`. El diagnóstico
+`GET /voice/pipeline` muestra piso de ruido, estado, ventanas y fallos por
+satélite. No existe STT local de respaldo.
+
+`WHISPER_MODEL` selecciona el modelo y parte en `large-v3`;
+`WHISPER_MODEL_DIR` define dónde se guarda. El servicio descarga el archivo
+automáticamente si falta. `WHISPER_MODEL_PATH` o `WHISPER_MODEL_URL` sólo son
+necesarios para usar una ruta o fuente personalizada. El instalador activa el
+backend Vulkan en un binario separado cuando Fedora Asahi expone la GPU Apple;
+`WHISPER_NO_GPU=true` fuerza CPU.
+
+Después de instalar, `ha-server` es la unidad principal y controla también
+los contenedores, Music Gateway y, cuando fue instalado localmente, Ollama:
 
 ```bash
-sudo systemctl start ha-containers ha-music-gateway ha-server
+sudo systemctl start ha-server
 /opt/ha/current/health-check.sh
 ```
+
+`ha-server` queda habilitado para iniciar con Fedora. Puede bajarse y subirse
+bajo demanda con `sudo systemctl stop ha-server` y
+`sudo systemctl start ha-server`. Docker no se detiene porque puede alojar otros
+proyectos, pero todos los contenedores de este asistente sí bajan.
 
 Music Assistant requiere crear su administrador en `http://IP_DEL_SERVIDOR:8095`. La autenticación de Music Gateway se completa posteriormente desde el display.
 

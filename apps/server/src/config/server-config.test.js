@@ -22,8 +22,8 @@ test("normaliza proveedores externos sin exponer secretos", () => {
   assert.equal(config.think, false);
 });
 
-test("rechaza archivos parciales y campos históricos", async () => {
+test("rechaza archivos parciales y campos desconocidos", async () => {
   const path = `/tmp/ha-server-config-${process.pid}-${Date.now()}.json`;
-  await writeFile(path, JSON.stringify({ locale: "es-CL", legacyProvider: true }));
+  await writeFile(path, JSON.stringify({ locale: "es-CL", unexpectedField: true }));
   await assert.rejects(() => readServerConfig(path), /debe contener exactamente/);
 });

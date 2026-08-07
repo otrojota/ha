@@ -19,6 +19,7 @@ const musicAssistantEnvPath = env("MUSIC_ASSISTANT_ENV_PATH", configPath("/etc/h
 const volumeOverrides = new Map();
 const VOLUME_CONFIRMATION_TIMEOUT_MS = 5000;
 const DESTINATION_DISCOVERY_MESSAGE = "El parlante aún no ha sido descubierto por el servidor. Espera unos minutos y vuelve a intentarlo";
+const ACTIVE_DESTINATION_REQUIRED_MESSAGE = "No hay un parlante activo para este satélite. Indica el parlante en la orden, por ejemplo: toca esta música en el parlante Cocina";
 const catalogRefreshMs = Math.max(10_000, Number(env("MUSIC_CATALOG_REFRESH_MS", "60000")) || 60_000);
 let catalog = { players: [], sources: [], refreshedAt: null, stale: true, error: null };
 let catalogRefreshPromise = null;
@@ -131,7 +132,7 @@ async function destination(query, { activate = true, scope } = {}) {
   const players = (await musicCatalog()).players.map(effectivePlayerVolume);
   if (activate && query) return store.setActive(players, query, scope);
   const result = store.resolve(players, query, scope);
-  if (!result) throw new Error(DESTINATION_DISCOVERY_MESSAGE);
+  if (!result) throw new Error(players.length && !query ? ACTIVE_DESTINATION_REQUIRED_MESSAGE : DESTINATION_DISCOVERY_MESSAGE);
   if (!query && !result.available) throw new Error(DESTINATION_DISCOVERY_MESSAGE);
   return result;
 }

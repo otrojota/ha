@@ -16,7 +16,7 @@ export class DeviceGatewayRegistry {
     return [...this.gateways.values()].map(({ type, provider }) => ({
       type, provider,
       name: type === "rgb_bulb" ? "Ampolleta RGB" : type,
-      providerName: provider === "home_assistant" ? "Home Assistant" : provider === "tuya" ? "Tuya (legado)" : provider,
+      providerName: provider === "home_assistant" ? "Home Assistant" : provider === "tuya" ? "Tuya" : provider,
       capabilities: type === "rgb_bulb" ? ["power", "brightness", "color", "color_temperature"] : []
     }));
   }

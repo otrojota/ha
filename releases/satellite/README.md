@@ -1,30 +1,12 @@
-# Release del satélite para Raspberry Pi
+# Release del satélite web para Raspberry Pi
 
-Esta receta genera e instala la versión indicada en
-`releases/satellite/manifest.json` en Raspberry Pi OS Lite de 64 bits. Está
-dirigida a Raspberry Pi 4 con pantalla táctil, PipeWire y Cog/WPE sobre
-Wayland/Labwc.
+El satélite no contiene un backend Node ni sirve archivos localmente. Chromium
+abre la URL de `apps/server`, donde descarga HTML y JavaScript; esa aplicación
+captura el micrófono, transmite PCM al servidor y reproduce el TTS recibido.
+El único proceso de audio nativo instalado por este release es el cliente
+oficial Sendspin, que registra el parlante en Music Assistant.
 
-## Qué instala el bootstrap
-
-- Node.js 20.
-- PipeWire, herramientas PulseAudio y FFmpeg.
-- Wayland/Labwc, Cog/WPE, Chromium de respaldo y `wlr-randr`, sin el conjunto completo de
-  aplicaciones de escritorio. La selección de Labwc y Desktop Autologin se
-  realiza manualmente en `raspi-config`, porque sus opciones no son estables
-  entre versiones de Raspberry Pi OS.
-- Vosk 0.3.45 y el modelo español `vosk-model-small-es-0.42`.
-- Piper 1.4.2 y la voz española `es_ES-sharvard-medium`.
-- El cliente oficial Sendspin mediante `uv` y Python 3.12.
-- Servicios `ha-display.service` y `ha-satellite.service`.
-- Inicio automático de Cog/WPE en `http://localhost:8080` cuando no existe ya
-  una entrada equivalente en el autostart de Labwc.
-
-El proceso de voz se ejecuta con el usuario normal de Raspberry Pi OS para
-tener acceso a su sesión PipeWire. El instalador toma `SUDO_USER` o permite
-indicarlo con `HA_SATELLITE_USER`.
-
-## Construir el artefacto
+## Construcción
 
 Desde la raíz del monorepo:
 
@@ -32,70 +14,40 @@ Desde la raíz del monorepo:
 ./releases/satellite/package.sh
 ```
 
-El resultado es:
+El artefacto se crea en `releases/dist/` para Linux ARM64.
 
-```text
-releases/dist/ha-satellite-X.Y.Z-linux-arm64.tar.gz
-releases/dist/ha-satellite-X.Y.Z-linux-arm64.tar.gz.sha256
-```
+## Instalación
 
-## Probar un artefacto local en la Raspberry Pi
-
-Después de copiar el `.tar.gz` a la Raspberry:
-
-```bash
-sudo HA_SATELLITE_USER="$USER" \
-  HA_RELEASE_ARCHIVE="$PWD/ha-satellite-X.Y.Z-linux-arm64.tar.gz" \
-  ./releases/satellite/install.sh
-```
-
-Para una GitHub Release publicada con tag `satellite-vX.Y.Z`:
+En Raspberry Pi OS Lite de 64 bits:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/otrojota/ha/main/releases/satellite/install.sh | sudo sh
 ```
 
-Para las actualizaciones habituales de `ha-satellite` y `ha-memo`, seguir el
-runbook de `INSTALACION.txt`.
-
-## Configuración y datos persistentes
+El instalador configura Chromium Kiosk en el autostart de Labwc y habilita
+`ha-satellite.service` para Sendspin. La configuración persistente es:
 
 ```text
 /etc/ha/satellite.env
-/etc/ha/satellite/audio.json
-/etc/ha/satellite/assistant.json
-/etc/ha/satellite/server.json
-/var/lib/ha/models/vosk-model-small-es-0.42
-/var/lib/ha/models/piper
 ```
 
-El backend se descubre exclusivamente mediante mDNS. El satélite conserva el
-último endpoint seleccionado para poder reconectarse si arranca antes que el
-servidor; no se configura una URL manual.
+Configura al menos `SERVER_URL` con el origen HTTP o HTTPS del servidor. El
+kiosco exige que HTTPS tenga un certificado confiable. Para una CA privada se
+puede pasar `HA_SERVER_CA_FILE` al instalador; éste la registra tanto en Debian
+como en el almacén NSS de Chromium, sin pedir aceptación manual. Los dispositivos
+de micrófono y salida TTS se eligen en la aplicación web y quedan
+guardados por el navegador. La salida musical de Sendspin se configura con sus
+variables opcionales en el mismo archivo.
 
-Después de modificar `/etc/ha/satellite.env`:
-
-```bash
-sudo systemctl restart ha-display ha-satellite
-```
+En Raspberry Pi OS el kiosco desactiva la ruta de cámara PipeWire de Chromium.
+En instalaciones Lite sin `xdg-desktop-portal`, esa ruta puede bloquear
+`enumerateDevices()` y ocultar también los dispositivos de audio. La aplicación
+no utiliza cámara; la captura y reproducción de audio continúan por PipeWire.
 
 ## Diagnóstico
 
 ```bash
 /opt/ha/current/health-check.sh
-sudo systemctl status ha-display ha-satellite --no-pager
+sudo systemctl status ha-satellite --no-pager
 sudo journalctl -u ha-satellite -f
 ```
-
-La configuración inicial de entrada, canal, salida, voz y servidor se completa
-desde el display táctil.
-
-La escucha automática de la palabra de activación está habilitada por defecto
-y puede apagarse en la configuración del asistente. Al apagarla se detienen
-Vosk y la captura continua; el botón de micrófono de la pantalla permanece
-disponible para iniciar una única ventana de escucha manual.
-
-En la primera instalación, `SATELLITE_ID` se deriva del hostname de la
-Raspberry para evitar que dos satélites nuevos compartan identidad. Se puede
-definir explícitamente con `HA_SATELLITE_ID` durante el bootstrap. Las
-actualizaciones conservan el identificador existente.

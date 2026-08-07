@@ -1,10 +1,10 @@
 import { createServer } from "node:http";
 import { hostname } from "node:os";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { WebSocketServer, WebSocket } from "ws";
 import { createEvent, EventType, isEvent, PROTOCOL_VERSION } from "@ha/contracts";
 import { configPath, env, jsonLog, readReleaseVersion } from "@ha/shared";
-import { WhisperCliSpeechToText } from "./speech/whisper-cli-speech-to-text.js";
+import { WhisperServerSpeechToText } from "./speech/whisper-server-speech-to-text.js";
 import { isAssistantNameOnly, isMeaningfulVoiceCommand } from "./speech/voice-command.js";
 import { AssistantAgent } from "./agent/assistant-agent.js";
 import { createLlmClient, LlmClientManager, testLlmClient } from "./agent/llm-client-manager.js";
@@ -50,8 +50,7 @@ import { createListMusicSourcesTool } from "./tools/music/list-sources.tool.js";
 import { createSetActiveMusicSourceTool } from "./tools/music/set-active-source.tool.js";
 import { createListLibraryRadiosTool } from "./tools/music/list-library-radios.tool.js";
 import { createListLibraryPlaylistsTool } from "./tools/music/list-library-playlists.tool.js";
-import { readOrCreateServerIdentity } from "./discovery/server-identity.js";
-import { ServerAdvertiser } from "./discovery/server-advertiser.js";
+import { readOrCreateServerIdentity } from "./config/server-identity.js";
 import { DeviceGatewayRegistry } from "./home-automation/device-gateway-registry.js";
 import { HomeAutomationService } from "./home-automation/home-automation-service.js";
 import { createHomeLightTools } from "./tools/home/light-tools.js";
@@ -61,9 +60,15 @@ import { HomeAssistantRgbBulbGateway } from "./home-automation/home-assistant-rg
 import { HomeAssistantCatalog } from "./home-automation/home-assistant-catalog.js";
 import { ScheduledAutomationExecutor } from "./automations/scheduled-automation-executor.js";
 import { createScheduleAutomationTool } from "./tools/automation/schedule-automation.tool.js";
-import { WakeWordModelStore } from "./wake-word/wake-word-model-store.js";
-import { WakeWordTrainingService } from "./wake-word/wake-word-training-service.js";
-import { createWakeWordHttpHandler } from "./wake-word/wake-word-http.js";
+import { createStreamingTtsProvider } from "./tts/index.js";
+import { VoiceConfigStore } from "./tts/voice-config-store.js";
+import { SatelliteSocketRegistry } from "./tts/satellite-socket-registry.js";
+import { TtsStreamService } from "./tts/tts-stream-service.js";
+import { VoiceInputSessionRegistry } from "./voice/voice-input-session.js";
+import { VoiceStateCoordinator } from "./voice/voice-state-coordinator.js";
+import { ContinuousVoiceRecognitionService } from "./voice/continuous-voice-recognition.js";
+import { createDisplayStaticHandler, defaultDisplayDirectory } from "./http/display-static.js";
+import { createMusicGatewayProxy } from "./http/music-gateway-proxy.js";
 
 const port = Number(env("SERVER_PORT", "3000"));
 const serverVersion = await readReleaseVersion(
@@ -77,7 +82,9 @@ const serverIdentity = await readOrCreateServerIdentity(
   env("SERVER_IDENTITY_PATH", configPath(`/etc/ha/server/identity-${serverHostName}.json`, `dev/server/config/identity-${serverHostName}.json`)),
   { name: env("SERVER_NAME", `Servidor ${serverHostName}`), log: jsonLog }
 );
-const serverAdvertiser = new ServerAdvertiser({ identity: serverIdentity, port, log: jsonLog });
+const serveDisplay = createDisplayStaticHandler({
+  directory: env("DISPLAY_PUBLIC_PATH", defaultDisplayDirectory)
+});
 const defaultAssistantName = "Asistente";
 const followUpTimeoutMs = Number(env("FOLLOW_UP_TIMEOUT_MS", "8000"));
 const serverConfig = await readServerConfig(serverConfigPath, jsonLog);
@@ -123,10 +130,10 @@ if (serverConfig.webSearch.enabled) {
     log: jsonLog
   }));
 }
-const musicGateway = new MusicGatewayClient({
-  baseUrl: env("MUSIC_GATEWAY_URL", "http://localhost:3100"),
-  timeoutMs: Number(env("MUSIC_GATEWAY_TIMEOUT_MS", "90000"))
-});
+const musicGatewayBaseUrl = env("MUSIC_GATEWAY_URL", "http://localhost:3100");
+const musicGatewayTimeoutMs = Number(env("MUSIC_GATEWAY_TIMEOUT_MS", "90000"));
+const musicGateway = new MusicGatewayClient({ baseUrl: musicGatewayBaseUrl, timeoutMs: musicGatewayTimeoutMs });
+const proxyMusicGateway = createMusicGatewayProxy({ baseUrl: musicGatewayBaseUrl, timeoutMs: musicGatewayTimeoutMs });
 let scheduledAutomationExecutor;
 const alarmScheduler = new AlarmScheduler({
   storagePath: env("ALARM_CONFIG_PATH", configPath("/etc/ha/server/alarms.json", "dev/server/config/alarms.json")),
@@ -177,24 +184,108 @@ const assistantAgent = new AssistantAgent({
 const conversationMemory = new ConversationMemory(serverConfig.conversationMemory);
 const memoryCleanup = setInterval(() => conversationMemory.cleanup(), 60_000);
 memoryCleanup.unref();
-const speechToText = new WhisperCliSpeechToText({
-  executable: env("WHISPER_CLI", "whisper-cli"),
-  modelPath: env("WHISPER_MODEL_PATH", ""),
+const whisperModel = env("WHISPER_MODEL", "large-v3");
+const whisperModelDirectory = env("WHISPER_MODEL_DIR", configPath("/var/lib/ha/models/whisper", "dev/server/models"));
+const speechToText = new WhisperServerSpeechToText({
+  executable: env("WHISPER_SERVER_CLI", "whisper-server"),
+  modelPath: env("WHISPER_MODEL_PATH", join(whisperModelDirectory, `ggml-${whisperModel}.bin`)),
   language: env("WHISPER_LANGUAGE", "es"),
-  noGpu: env("WHISPER_NO_GPU", "false") === "true"
-});
-const wakeWordModelStore = new WakeWordModelStore({
-  rootPath: env("WAKE_WORD_MODELS_PATH", configPath("/var/lib/ha/wake-word", "dev/server/wake-word"))
-});
-await wakeWordModelStore.initialize();
-const defaultWakeWordTrainer = fileURLToPath(new URL("../wake-word-trainer/run.sh", import.meta.url));
-const wakeWordTraining = new WakeWordTrainingService({
-  store: wakeWordModelStore,
-  executable: env("WAKE_WORD_TRAINER_EXECUTABLE", defaultWakeWordTrainer),
+  noGpu: env("WHISPER_NO_GPU", "false") === "true",
+  threads: Number(env("WHISPER_THREADS", "4")),
+  bestOf: Number(env("WHISPER_BEST_OF", "2")),
+  host: env("WHISPER_SERVER_HOST", "127.0.0.1"),
+  port: Number(env("WHISPER_SERVER_PORT", "8178")),
+  startupTimeoutMs: Number(env("WHISPER_SERVER_STARTUP_TIMEOUT_MS", "120000")),
+  requestTimeoutMs: Number(env("WHISPER_SERVER_REQUEST_TIMEOUT_MS", "120000")),
+  managed: env("WHISPER_SERVER_MANAGED", "true") === "true",
   log: jsonLog
 });
-wakeWordTraining.startAutomatic(Number(env("WAKE_WORD_AUTO_TRAIN_INTERVAL_MS", "600000")));
-const handleWakeWordRequest = createWakeWordHttpHandler({ store: wakeWordModelStore, training: wakeWordTraining });
+await speechToText.initialize();
+const streamingTtsProvider = createStreamingTtsProvider({ log: jsonLog });
+await streamingTtsProvider.initialize?.();
+const voiceConfig = new VoiceConfigStore({
+  path: env("TTS_CONFIG_PATH", configPath("/etc/ha/server/tts.json", "dev/server/config/tts.json")),
+  log: jsonLog
+});
+await voiceConfig.initialize();
+const satelliteSockets = new SatelliteSocketRegistry();
+const voiceInputSessions = new VoiceInputSessionRegistry({
+  log: jsonLog,
+  ringBufferMs: Number(env("VOICE_INPUT_RING_BUFFER_MS", "3000")),
+  discontinuityMs: Number(env("VOICE_INPUT_DISCONTINUITY_MS", "250"))
+});
+const voiceListeningTimeoutMs = Number(env("VOICE_STATE_LISTENING_TIMEOUT_MS", "7000"));
+const satelliteVoiceConfigs = new Map();
+const centralCommandAttempts = new Map();
+const voiceStates = new VoiceStateCoordinator({
+  sessions: voiceInputSessions,
+  publish: (payload) => broadcast(createEvent(EventType.VOICE_STATE_CHANGED, payload, "server")),
+  requestListening: (satelliteId, payload) => {
+    const socket = satelliteSockets.get(satelliteId);
+    if (!socket) throw new Error(`El satélite ${satelliteId} no está conectado para escuchar`);
+    socket.send(JSON.stringify(createEvent(EventType.VOICE_LISTEN_REQUESTED, {
+      ...payload,
+      targetSatelliteId: satelliteId
+    }, "server")));
+  },
+  log: jsonLog
+});
+const ttsStreams = new TtsStreamService({
+  provider: streamingTtsProvider,
+  voiceConfig,
+  sockets: satelliteSockets,
+  log: jsonLog,
+  onStreamStarted: ({ satelliteId, activationId }) => {
+    if (voiceInputSessions.session(satelliteId)) {
+      voiceStates.speaking(satelliteId, { activationId, reason: "tts_started" });
+    }
+  },
+  onStreamFailed: ({ satelliteId, reason }) => {
+    const session = voiceInputSessions.session(satelliteId);
+    if (!session || (reason === "spoken_interruption" && session.state === "listening")) return;
+    voiceStates.complete(satelliteId, "tts_failed");
+  }
+});
+const continuousVoiceRecognition = new ContinuousVoiceRecognitionService({
+  speechToText,
+  voiceStates,
+  sessionProvider: (satelliteId) => voiceInputSessions.session(satelliteId),
+  initialNoiseFloorDb: Number(env("VOICE_INITIAL_NOISE_FLOOR_DB", "-50")),
+  speechStartMarginDb: Number(env("VOICE_SPEECH_START_MARGIN_DB", "8")),
+  speechEndMarginDb: Number(env("VOICE_SPEECH_END_MARGIN_DB", "5")),
+  minimumSpeechMs: Number(env("VOICE_MINIMUM_SPEECH_MS", "120")),
+  silenceDurationMs: Number(env("VOICE_SILENCE_DURATION_MS", "800")),
+  preRollMs: Number(env("VOICE_PRE_ROLL_MS", "400")),
+  maximumPhraseMs: Number(env("VOICE_MAXIMUM_PHRASE_MS", "8000")),
+  partialIntervalMs: Number(env("VOICE_CONTINUOUS_PARTIAL_INTERVAL_MS", "700")),
+  partialMinimumMs: Number(env("VOICE_CONTINUOUS_PARTIAL_MINIMUM_MS", "700")),
+  listeningTimeoutMs: voiceListeningTimeoutMs,
+  onPartial: ({ satelliteId, activationId, text, command, final, interruption }) => {
+    broadcast(createEvent(EventType.TRANSCRIPT_PARTIAL, {
+      targetSatelliteId: satelliteId,
+      activationId,
+      text,
+      command: command || "",
+      final: final === true,
+      interruption: interruption === true
+    }, satelliteId));
+  },
+  onCommand: ({ satelliteId, activationId, transcript }) => processVoiceTranscript(transcript, satelliteId, {
+    activationId,
+    origin: "continuous"
+  }),
+  onInterrupt: ({ satelliteId, activationId, text }) => {
+    const session = voiceInputSessions.session(satelliteId);
+    if (!session || session.activationId !== activationId) return;
+    ttsStreams.cancel(satelliteId, "spoken_interruption");
+    voiceStates.interruptAndListen(satelliteId, {
+      timeoutMs: voiceListeningTimeoutMs,
+      reason: "spoken_interruption"
+    });
+    jsonLog("info", "Interrupción de voz reconocida", { satelliteId, activationId, text });
+  },
+  log: jsonLog
+});
 
 const server = createServer((request, response) => {
   response.setHeader("Access-Control-Allow-Origin", "*");
@@ -202,9 +293,23 @@ const server = createServer((request, response) => {
   response.setHeader("Access-Control-Allow-Methods", "GET, PUT, POST, DELETE, OPTIONS");
   response.setHeader("Content-Type", "application/json");
   if (request.method === "OPTIONS") return response.end();
-  if (request.url === "/health") return response.end(JSON.stringify({ status: "ok", server: serverIdentity, protocolVersion: PROTOCOL_VERSION }));
+  if (request.url === "/health") return response.end(JSON.stringify({
+    status: "ok",
+    server: serverIdentity,
+    protocolVersion: PROTOCOL_VERSION,
+    activeVoiceInputStreams: voiceInputSessions.activeCount()
+  }));
   if (request.url === "/identity") return response.end(JSON.stringify({ server: serverIdentity, protocolVersion: PROTOCOL_VERSION, port }));
   if (request.url === "/version" && request.method === "GET") return response.end(JSON.stringify({ component: "server", version: serverVersion, server: serverIdentity }));
+  if (request.url === "/voice/input/sessions" && request.method === "GET") {
+    return response.end(JSON.stringify({ sessions: voiceInputSessions.list() }));
+  }
+  if (request.url === "/voice/states" && request.method === "GET") {
+    return response.end(JSON.stringify({ sessions: voiceStates.list() }));
+  }
+  if (request.url === "/voice/pipeline" && request.method === "GET") {
+    return response.end(JSON.stringify({ enabled: true, provider: "stt", sessions: continuousVoiceRecognition.list() }));
+  }
   if (request.url === "/config/location" && request.method === "GET") return response.end(JSON.stringify({ location: serverConfig.location }));
   if (request.url === "/config/location" && request.method === "PUT") return handleLocationUpdate(request, response);
   if (request.url === "/config/location/detect" && request.method === "POST") return handleLocationDetection(response);
@@ -218,20 +323,58 @@ const server = createServer((request, response) => {
   if (request.url === "/home/integrations/home-assistant" && request.method === "PUT") return handleHomeAssistantUpdate(request, response);
   if (request.url === "/home/integrations/home-assistant/test" && request.method === "POST") return handleHomeAssistantTest(request, response);
   if (request.url === "/home/integrations/home-assistant/credential" && request.method === "DELETE") return handleHomeAssistantCredentialDelete(response);
-  if (request.method === "POST" && request.url === "/stt/transcribe") {
-    return handleTranscription(request, response);
-  }
-  void handleWakeWordRequest(request, response).then((handled) => {
-    if (handled !== false || response.writableEnded) return;
+  if (request.url?.startsWith("/tts/")) return handleTtsRequest(request, response);
+  void proxyMusicGateway(request, response).then((proxied) => {
+    if (proxied) return true;
+    return serveDisplay(request, response);
+  }).then((served) => {
+    if (served) return;
     response.statusCode = 404;
+    response.setHeader("Content-Type", "application/json");
     response.end(JSON.stringify({ error: "not_found" }));
   }).catch((error) => {
-    jsonLog("warn", "Error en administración de wake words", { error: error.message });
-    if (response.writableEnded) return;
+    jsonLog("error", "No se pudo servir la aplicación web", { error: error.message });
     response.statusCode = 500;
-    response.end(JSON.stringify({ error: "wake_word_server_error", message: error.message }));
+    response.setHeader("Content-Type", "application/json");
+    response.end(JSON.stringify({ error: "display_unavailable" }));
   });
 });
+
+async function handleTtsRequest(request, response) {
+  try {
+    const url = new URL(request.url, "http://localhost");
+    const match = /^\/tts\/satellites\/([^/]+)$/.exec(url.pathname);
+    const preview = /^\/tts\/satellites\/([^/]+)\/preview$/.exec(url.pathname);
+    if (request.method === "GET" && url.pathname === "/tts/voices") {
+      const satelliteId = url.searchParams.get("satelliteId") || "";
+      return response.end(JSON.stringify(await ttsStreams.catalog(satelliteId)));
+    }
+    if (request.method === "GET" && match) {
+      return response.end(JSON.stringify(await ttsStreams.catalog(decodeURIComponent(match[1]))));
+    }
+    if (request.method === "PUT" && match) {
+      const body = await readJsonRequest(request);
+      return response.end(JSON.stringify(await ttsStreams.assign(decodeURIComponent(match[1]), body.voiceId)));
+    }
+    if (request.method === "POST" && preview) {
+      const satelliteId = decodeURIComponent(preview[1]);
+      const body = await readJsonRequest(request);
+      if (!ttsStreams.isConnected(satelliteId)) {
+        response.statusCode = 409;
+        return response.end(JSON.stringify({ error: "satellite_not_connected", message: "El satélite no está conectado al servidor" }));
+      }
+      void ttsStreams.speak(String(body.text || "Hola, esta es una prueba de mi voz."), satelliteId)
+        .catch((error) => jsonLog("warn", "Falló la prueba de voz", { satelliteId, error: error.message }));
+      response.statusCode = 202;
+      return response.end(JSON.stringify({ accepted: true, satelliteId }));
+    }
+    response.statusCode = 404;
+    response.end(JSON.stringify({ error: "not_found" }));
+  } catch (error) {
+    response.statusCode = 400;
+    response.end(JSON.stringify({ error: "invalid_tts_request", message: error.message }));
+  }
+}
 
 async function readJsonRequest(request) {
   let body = "";
@@ -405,14 +548,16 @@ function publishAssistantResponse(text, targetSatelliteId, {
     ...(activationId ? { activationId } : {})
   }, "server");
   broadcast(responseEvent);
-  if (!speak) return;
-  broadcast(createEvent(EventType.ASSISTANT_SPEECH_REQUESTED, {
-    text,
+  if (!speak) {
+    voiceStates.complete(targetSatelliteId, "response_without_speech");
+    return;
+  }
+  void ttsStreams.speak(text, targetSatelliteId, {
     responseId: responseEvent.id,
-    targetSatelliteId,
     expectsReply,
-    followUpTimeoutMs: expectsReply ? followUpTimeoutMs : 0
-  }, "server"));
+    followUpTimeoutMs: expectsReply ? followUpTimeoutMs : 0,
+    activationId
+  }).catch((error) => jsonLog("warn", "No se pudo transmitir la respuesta TTS", { targetSatelliteId, error: error.message }));
 }
 
 async function publishWeatherUpdate() {
@@ -430,6 +575,8 @@ async function publishWeatherUpdate() {
 }
 
 async function respondToCommand(text, source, context = {}) {
+  const activationId = context.activationId || voiceInputSessions.session(source)?.activationId || null;
+  voiceStates.processing(source, { reason: "assistant_processing", activationId });
   broadcast(createEvent(EventType.ASSISTANT_PROCESSING, {
     text: "Procesando tu solicitud…",
     targetSatelliteId: source
@@ -439,7 +586,7 @@ async function respondToCommand(text, source, context = {}) {
     const answer = "Listo, olvidé nuestra conversación. Empecemos de nuevo.";
     publishAssistantResponse(answer, source, {
       commandProcessed: true,
-      activationId: context.activationId
+      activationId
     });
     jsonLog("info", "Memoria de conversación reiniciada", { source });
     return;
@@ -457,12 +604,21 @@ async function respondToCommand(text, source, context = {}) {
       history,
       suppressSpeech: () => { suppressSpeech = true; }
     });
+    const currentVoiceSession = voiceInputSessions.session(source);
+    if (activationId && currentVoiceSession?.activationId !== activationId) {
+      jsonLog("info", "Respuesta obsoleta descartada después de una interrupción", {
+        source,
+        activationId,
+        currentActivationId: currentVoiceSession?.activationId || null
+      });
+      return;
+    }
     const answer = removeGenericFollowUp(generatedAnswer) || "Listo.";
     conversationMemory.appendTurn(source, text, answer);
     publishAssistantResponse(answer, source, {
       speak: !suppressSpeech,
       commandProcessed: true,
-      activationId: context.activationId
+      activationId
     });
     jsonLog("info", "Respuesta del asistente creada", { text: answer, source, speechSuppressed: suppressSpeech });
   } catch (error) {
@@ -470,69 +626,87 @@ async function respondToCommand(text, source, context = {}) {
     const text = "Lo siento, no pude procesar esa solicitud.";
     publishAssistantResponse(text, source, {
       commandProcessed: false,
-      activationId: context.activationId
+      activationId
     });
   }
 }
 
-async function handleTranscription(request, response) {
-  try {
-    const source = String(request.headers["x-satellite-id"] || "").trim();
-    if (!source) {
-      response.statusCode = 400;
-      return response.end(JSON.stringify({ error: "satellite_id_required", message: "Falta el encabezado X-Satellite-Id" }));
-    }
-    const chunks = [];
-    let size = 0;
-    for await (const chunk of request) {
-      size += chunk.length;
-      if (size > 10_000_000) throw new Error("El audio supera el máximo de 10 MB");
-      chunks.push(chunk);
-    }
-    const transcript = await speechToText.transcribe(Buffer.concat(chunks));
-    const assistantName = String(request.headers["x-assistant-name"] || defaultAssistantName).trim();
-    const connectedPowerDeviceId = String(request.headers["x-connected-power-device-id"] || "").trim();
-    const activationId = String(request.headers["x-voice-activation-id"] || "").trim();
-    if (activationId && !/^[a-f0-9-]{36}$/i.test(activationId)) throw new Error("El identificador de activación es inválido");
-    if (connectedPowerDeviceId && !/^switch\.[a-z0-9_]+$/.test(connectedPowerDeviceId)) {
-      throw new Error("El enchufe conectado del satélite no es una entidad switch válida");
-    }
-    const text = transcript.trim();
-    const assistantNameOnly = isAssistantNameOnly(text, assistantName);
-    const meaningfulCommand = !assistantNameOnly && isMeaningfulVoiceCommand(text);
-    const awaitingCommand = !meaningfulCommand;
-    if (meaningfulCommand) {
-      broadcast(createEvent(EventType.TRANSCRIPT_RECEIVED, {
-        text,
-        transcript,
-        assistantName,
-        connectedPowerDeviceId: connectedPowerDeviceId || null
-      }, source));
-      void respondToCommand(text, source, {
-        assistantName,
-        connectedPowerDeviceId: connectedPowerDeviceId || null,
-        activationId: activationId || null
-      });
-    }
-    if (assistantNameOnly) {
-      jsonLog("info", "Nombre aislado del asistente; esperando el comando siguiente", { transcript, assistantName, source });
-    } else if (!meaningfulCommand) {
-      jsonLog("info", "Transcripción de ruido ignorada", { transcript, source });
-    }
-    response.end(JSON.stringify({
-      accepted: meaningfulCommand,
-      transcript,
-      text,
-      assistantName,
-      awaitingCommand,
-      ignoredAsNoise: !meaningfulCommand && !assistantNameOnly,
-      reason: assistantNameOnly ? "assistant_name_only" : meaningfulCommand ? "command" : "noise"
-    }));
-  } catch (error) {
-    jsonLog("warn", "No se pudo transcribir el audio", { error: error.message });
-    response.statusCode = 503;
-    response.end(JSON.stringify({ error: "transcription_unavailable", message: error.message }));
+async function processVoiceTranscript(transcript, source, {
+  assistantName = null,
+  connectedPowerDeviceId = null,
+  activationId = null,
+  origin = "local"
+} = {}) {
+  const currentSession = voiceInputSessions.session(source);
+  if (["central", "continuous"].includes(origin) && (!currentSession || currentSession.activationId !== activationId)) {
+    jsonLog("info", "Transcripción central obsoleta descartada", { source, activationId });
+    return {
+      accepted: false,
+      transcript: String(transcript || "").trim(),
+      text: String(transcript || "").trim(),
+      assistantName: defaultAssistantName,
+      awaitingCommand: false,
+      ignoredAsNoise: true,
+      reason: "stale_activation"
+    };
   }
+  const configured = satelliteVoiceConfigs.get(source) || {};
+  const effectiveAssistantName = String(assistantName || configured.assistantName || configured.wakeWord || defaultAssistantName).trim();
+  const effectivePowerDeviceId = String(connectedPowerDeviceId || configured.connectedPowerDeviceId || "").trim() || null;
+  const authoritativeActivationId = currentSession?.activationId || activationId || null;
+  const text = String(transcript || "").trim();
+  const assistantNameOnly = isAssistantNameOnly(text, effectiveAssistantName);
+  const meaningfulCommand = !assistantNameOnly && isMeaningfulVoiceCommand(text);
+  const awaitingCommand = !meaningfulCommand;
+
+  if (meaningfulCommand) {
+    if (authoritativeActivationId) centralCommandAttempts.delete(authoritativeActivationId);
+    voiceStates.processing(source, { reason: `${origin}_transcript_accepted`, activationId: authoritativeActivationId });
+    broadcast(createEvent(EventType.TRANSCRIPT_RECEIVED, {
+      text,
+      transcript: text,
+      assistantName: effectiveAssistantName,
+      connectedPowerDeviceId: effectivePowerDeviceId,
+      activationId: authoritativeActivationId,
+      origin
+    }, source));
+    void respondToCommand(text, source, {
+      assistantName: effectiveAssistantName,
+      connectedPowerDeviceId: effectivePowerDeviceId,
+      activationId: authoritativeActivationId
+    });
+  } else if (origin === "central" && authoritativeActivationId) {
+    const attempts = centralCommandAttempts.get(authoritativeActivationId) || 0;
+    if (attempts < 1) {
+      centralCommandAttempts.set(authoritativeActivationId, attempts + 1);
+      voiceStates.followUp(source, {
+        timeoutMs: voiceListeningTimeoutMs,
+        reason: assistantNameOnly ? "wake_word_only" : "central_noise_retry",
+        requestListening: false
+      });
+    } else {
+      centralCommandAttempts.delete(authoritativeActivationId);
+      voiceStates.complete(source, assistantNameOnly ? "wake_word_without_command" : "central_noise");
+    }
+  }
+
+  if (assistantNameOnly) {
+    jsonLog("info", "Nombre aislado del asistente; esperando el comando siguiente", {
+      transcript: text, assistantName: effectiveAssistantName, source, origin
+    });
+  } else if (!meaningfulCommand) {
+    jsonLog("info", "Transcripción de ruido ignorada", { transcript: text, source, origin });
+  }
+
+  return {
+    accepted: meaningfulCommand,
+    transcript: text,
+    text,
+    assistantName: effectiveAssistantName,
+    awaitingCommand,
+    ignoredAsNoise: !meaningfulCommand && !assistantNameOnly,
+    reason: assistantNameOnly ? "assistant_name_only" : meaningfulCommand ? "command" : "noise"
+  };
 }
 
 websocket.on("connection", (socket, request) => {
@@ -542,12 +716,76 @@ websocket.on("connection", (socket, request) => {
   }, "server")));
   void publishWeatherUpdate();
 
-  socket.on("message", (data) => {
+  socket.on("message", (data, isBinary) => {
     try {
+      if (isBinary) {
+        const result = voiceInputSessions.accept(socket, data);
+        const session = voiceInputSessions.session(socket.satelliteId);
+        continuousVoiceRecognition.accept(socket.satelliteId, session, result);
+        return;
+      }
       const event = JSON.parse(data.toString());
       if (!isEvent(event)) throw new Error("Evento inválido");
-      if (event.type === EventType.AUDIO_LEVEL_UPDATED) throw new Error("audio.level.updated es un evento exclusivamente local del satélite");
+      if (event.type === EventType.VOICE_STATE_CHANGED) throw new Error("voice.state.changed es autoritativo del servidor");
       jsonLog("info", "Evento recibido", { type: event.type, source: event.source });
+      if (event.type === EventType.SATELLITE_CONNECTED) satelliteSockets.register(event.source, socket);
+      if ([
+        EventType.VOICE_LISTEN_REQUESTED,
+        EventType.ASSISTANT_SPEECH_PLAYBACK_ENDED,
+        EventType.TRANSCRIPT_RECEIVED
+      ].includes(event.type) && (!socket.satelliteId || event.source !== socket.satelliteId)) {
+        throw new Error("El evento de voz no pertenece al satélite registrado");
+      }
+      if (event.type === EventType.WAKE_WORD_CONFIGURED) {
+        if (!socket.satelliteId || event.source !== socket.satelliteId) {
+          throw new Error("La configuración wake word no pertenece al satélite registrado");
+        }
+        satelliteVoiceConfigs.set(event.source, {
+          assistantName: String(event.payload?.wakeWord || defaultAssistantName).trim(),
+          wakeWord: String(event.payload?.wakeWord || defaultAssistantName).trim(),
+          connectedPowerDeviceId: String(event.payload?.connectedPowerDeviceId || "").trim() || null
+        });
+        continuousVoiceRecognition.configure(event.source, event.payload);
+        return;
+      }
+      if (event.type === EventType.VOICE_INPUT_STREAM_STARTED) {
+        voiceInputSessions.start(socket, event);
+        voiceStates.register(event.source);
+        return;
+      }
+      if (event.type === EventType.VOICE_INPUT_STREAM_ENDED) {
+        voiceStates.remove(event.source);
+        continuousVoiceRecognition.remove(event.source);
+        voiceInputSessions.end(socket, event);
+        return;
+      }
+      if (event.type === EventType.VOICE_LISTEN_REQUESTED) {
+        if (!socket.satelliteId || event.source !== socket.satelliteId) {
+          throw new Error("La solicitud de escucha no pertenece al satélite registrado");
+        }
+        voiceStates.activate(event.source, {
+          reason: event.payload?.reason || "manual_request",
+          timeoutMs: Number(event.payload?.timeoutMs) || voiceListeningTimeoutMs,
+          requestListening: false,
+          metadata: { manual: event.payload?.manual === true }
+        });
+        return;
+      }
+      if (event.type === EventType.ASSISTANT_SPEECH_PLAYBACK_ENDED) {
+        if (!socket.satelliteId || event.source !== socket.satelliteId) {
+          throw new Error("El cierre de reproducción no pertenece al satélite registrado");
+        }
+        const session = voiceInputSessions.session(event.source);
+        if (event.payload?.activationId && session?.activationId !== event.payload.activationId) return;
+        if (event.payload?.expectsReply === true && event.payload?.failed !== true) {
+          voiceStates.followUp(event.source, {
+            timeoutMs: Number(event.payload?.followUpTimeoutMs) || followUpTimeoutMs,
+            reason: "tts_playback_completed"
+          });
+        } else {
+          voiceStates.complete(event.source, event.payload?.failed ? "tts_playback_failed" : "tts_playback_completed");
+        }
+      }
       broadcast(event, socket);
 
       if (event.type === EventType.TRANSCRIPT_RECEIVED) {
@@ -557,12 +795,22 @@ websocket.on("connection", (socket, request) => {
         }
         void respondToCommand(event.payload.text, event.source, {
           assistantName: event.payload.assistantName || defaultAssistantName,
-          connectedPowerDeviceId: connectedPowerDeviceId || null
+          connectedPowerDeviceId: connectedPowerDeviceId || null,
+          activationId: voiceInputSessions.session(event.source)?.activationId || null
         });
       }
     } catch (error) {
       jsonLog("warn", "Mensaje WebSocket rechazado", { error: error.message });
     }
+  });
+  socket.on("close", () => {
+    if (socket.satelliteId) {
+      voiceStates.remove(socket.satelliteId);
+      continuousVoiceRecognition.remove(socket.satelliteId);
+      satelliteVoiceConfigs.delete(socket.satelliteId);
+    }
+    voiceInputSessions.remove(socket);
+    satelliteSockets.remove(socket);
   });
 });
 
@@ -570,16 +818,24 @@ const weatherRefresh = setInterval(() => void publishWeatherUpdate(), 15 * 60_00
 weatherRefresh.unref();
 const homeAssistantRefresh = setInterval(() => void homeAssistantCatalog.refresh(), Number(env("HOME_ASSISTANT_REFRESH_MS", "60000")));
 homeAssistantRefresh.unref();
+const voiceInputMetrics = setInterval(
+  () => {
+    voiceInputSessions.logMetrics();
+  },
+  Math.max(1_000, Number(env("VOICE_INPUT_METRICS_INTERVAL_MS", "10000")) || 10_000)
+);
+voiceInputMetrics.unref();
 server.listen(port, "0.0.0.0", () => {
   jsonLog("info", "Servidor iniciado", { port, server: serverIdentity, ...serverConfig });
-  serverAdvertiser.start();
   void publishWeatherUpdate();
 });
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.once(signal, () => {
-    wakeWordTraining.stopAutomatic();
-    serverAdvertiser.stop();
+    clearInterval(voiceInputMetrics);
+    voiceStates.close();
+    speechToText.close();
+    streamingTtsProvider.close?.();
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 1000).unref();
   });

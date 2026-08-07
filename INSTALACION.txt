@@ -1,210 +1,46 @@
-# Releases e instalaciones
+INSTALACIÓN Y ACTUALIZACIÓN
+===========================
 
-Este archivo es el runbook operativo para actualizar los dos satélites
-Raspberry Pi y el servidor. Los comandos se ejecutan desde la raíz del
-monorepo, salvo que se indique lo contrario.
+Servidor
+--------
 
-## Equipos
+Construir el artefacto:
 
-Los aliases deben existir en `~/.ssh/config`:
+    ./releases/server/package.sh
 
-| Alias SSH | Equipo | Componente |
-| --- | --- | --- |
-| `ha-satellite` | Raspberry con pantalla táctil rotada de 7" | Satellite + Display |
-| `ha-memo` | Raspberry con pantalla táctil HDMI | Satellite + Display |
-| `ha-server` | `macserver` | Server + Music Gateway + contenedores |
+El bootstrap y los detalles de plataforma están documentados en
+`releases/server/README.md`. La instalación habilita:
 
-La configuración y los datos persistentes viven bajo `/etc/ha` y
-`/var/lib/ha`. Una actualización no debe reemplazarlos.
+    ha-containers.service
+    ha-music-gateway.service
+    ha-server.service
 
-## 1. Preparar la versión
+Verificación:
 
-Usar una versión semántica nueva y mantener sincronizados los manifiestos de
-los componentes que se desplegarán:
+    /opt/ha/current/health-check.sh
+    sudo systemctl status ha-containers ha-music-gateway ha-server --no-pager
 
-```text
-releases/satellite/manifest.json
-releases/server/manifest.json
-```
+Satélite web
+------------
 
-No inferir una versión nueva a partir de los artefactos existentes en
-`releases/dist`.
+Construir el artefacto:
 
-## 2. Validar antes de empaquetar
+    ./releases/satellite/package.sh
 
-```bash
-npm run check
-npm test
-sh -n releases/satellite/package.sh \
-  releases/satellite/install-release.sh \
-  releases/server/package.sh \
-  releases/server/install-release.sh \
-  scripts/deploy-satellite.sh \
-  scripts/deploy-server.sh
-git diff --check
-```
+Instalar en Raspberry Pi OS Lite de 64 bits:
 
-Si una prueba falla, no desplegar.
+    curl -fsSL https://raw.githubusercontent.com/otrojota/ha/main/releases/satellite/install.sh | sudo sh
 
-## 3. Construir los artefactos
+Después, configura `/etc/ha/satellite.env`:
 
-Reemplazar `X.Y.Z` por la versión de los manifiestos:
+    SERVER_URL=https://ha-server
 
-```bash
-./releases/satellite/package.sh X.Y.Z
-./releases/server/package.sh X.Y.Z
-```
+El release habilita solamente `ha-satellite.service`, que ejecuta Sendspin.
+Chromium Kiosk se inicia desde Labwc y descarga la aplicación desde
+`SERVER_URL`; no existe un servidor web local en la Raspberry.
 
-El satélite siempre genera ARM64. El servidor genera la arquitectura de la
-máquina de desarrollo; para `ha-server` debe existir:
+Verificación:
 
-```text
-releases/dist/ha-satellite-X.Y.Z-linux-arm64.tar.gz
-releases/dist/ha-satellite-X.Y.Z-linux-arm64.tar.gz.sha256
-releases/dist/ha-server-X.Y.Z-linux-arm64.tar.gz
-releases/dist/ha-server-X.Y.Z-linux-arm64.tar.gz.sha256
-```
-
-## 4. Instalar los wrappers de despliegue
-
-Esto se hace una vez por equipo o cuando cambia un wrapper:
-
-```bash
-./scripts/install-deploy-wrappers.sh
-```
-
-El script instala:
-
-```text
-/usr/local/sbin/ha-deploy-satellite
-/usr/local/sbin/ha-deploy-server
-```
-
-y reglas `sudoers` limitadas a esos comandos. Debe terminar correctamente para
-`ha-satellite`, `ha-memo` y `ha-server`.
-
-Comprobación:
-
-```bash
-ssh ha-satellite 'test -x /usr/local/sbin/ha-deploy-satellite && sudo -n -l | grep -F /usr/local/sbin/ha-deploy-satellite'
-ssh ha-memo      'test -x /usr/local/sbin/ha-deploy-satellite && sudo -n -l | grep -F /usr/local/sbin/ha-deploy-satellite'
-ssh ha-server    'test -x /usr/local/sbin/ha-deploy-server && sudo -n -l | grep -F /usr/local/sbin/ha-deploy-server'
-```
-
-Los wrappers no aceptan argumentos. No ejecutarlos directamente como prueba:
-si hay un artefacto pendiente realizarán el despliegue.
-
-## 5. Desplegar
-
-### Satélites
-
-Instalar primero en un satélite, verificarlo y luego instalar exactamente el
-mismo artefacto en el otro:
-
-```bash
-./scripts/deploy-satellite.sh X.Y.Z ha-satellite
-./scripts/deploy-satellite.sh X.Y.Z ha-memo
-```
-
-El instalador conserva la configuración, actualiza `/opt/ha/current`, reinicia
-`ha-display` y `ha-satellite`, y relanza Cog/WPE en la sesión gráfica existente.
-No reinicia la Raspberry completa.
-
-### Servidor
-
-`scripts/deploy-server.sh` exige que exista exactamente un artefacto
-`ha-server-*-linux-arm64.tar.gz` en `releases/dist`. Si hay artefactos antiguos,
-muévelos fuera de `releases/dist` antes de ejecutar:
-
-```bash
-./scripts/deploy-server.sh
-```
-
-El despliegue reinicia `ha-containers`, `ha-music-gateway` y `ha-server`.
-
-Los modelos wake word no se copian desde desarrollo durante una instalación.
-Cada servidor conserva sus propias muestras y modelos en
-`/var/lib/ha/wake-word`. Con el modo entrenamiento habilitado en un satélite,
-el servidor incorpora muestras reales, reentrena periódicamente y publica el
-ONNX resultante; los satélites que lo tengan activo lo actualizarán
-automáticamente.
-
-## 6. Verificación posterior
-
-### Cada satélite
-
-```bash
-ssh ha-satellite '
-  printf "version="; cat /opt/ha/current/VERSION
-  /opt/ha/current/health-check.sh
-  systemctl is-active ha-display ha-satellite
-  pgrep -a cog
-  curl -fsS http://127.0.0.1:8080/ >/dev/null
-  curl -fsS http://127.0.0.1:3200/audio >/dev/null
-'
-
-ssh ha-memo '
-  printf "version="; cat /opt/ha/current/VERSION
-  /opt/ha/current/health-check.sh
-  systemctl is-active ha-display ha-satellite
-  pgrep -a cog
-  curl -fsS http://127.0.0.1:8080/ >/dev/null
-  curl -fsS http://127.0.0.1:3200/audio >/dev/null
-'
-```
-
-### Servidor
-
-```bash
-ssh ha-server '
-  printf "version="; cat /opt/ha/current/VERSION
-  /opt/ha/current/health-check.sh
-  systemctl is-active ha-containers ha-music-gateway ha-server
-  curl -fsS http://127.0.0.1:3000/health
-  curl -fsS http://127.0.0.1:3100/health
-  curl -fsS http://127.0.0.1:3000/api/wake-word/models
-'
-```
-
-No considerar terminada la instalación hasta que la versión sea la esperada,
-los servicios estén activos y los health checks pasen.
-
-## 7. Alternativa si falta el wrapper del satélite
-
-Preferir instalar el wrapper. Para recuperar un satélite cuando eso no sea
-posible, copiar e instalar directamente el artefacto:
-
-```bash
-scp releases/dist/ha-satellite-X.Y.Z-linux-arm64.tar.gz \
-  HOST:/tmp/ha-satellite-X.Y.Z-linux-arm64.tar.gz
-
-ssh HOST '
-  work=$(mktemp -d)
-  tar -xzf /tmp/ha-satellite-X.Y.Z-linux-arm64.tar.gz -C "$work"
-  sudo env HA_SATELLITE_USER=jota \
-    "$work/ha-satellite-X.Y.Z/install-release.sh"
-  status=$?
-  rm -f /tmp/ha-satellite-X.Y.Z-linux-arm64.tar.gz
-  rm -rf "$work"
-  exit "$status"
-'
-```
-
-Sustituir `HOST` por `ha-satellite` o `ha-memo`. Después ejecutar siempre las
-verificaciones de la sección anterior.
-
-## Diagnóstico
-
-```bash
-ssh ha-satellite 'sudo systemctl status ha-display ha-satellite --no-pager'
-ssh ha-memo      'sudo systemctl status ha-display ha-satellite --no-pager'
-ssh ha-server    'sudo systemctl status ha-containers ha-music-gateway ha-server --no-pager'
-```
-
-Logs:
-
-```bash
-ssh ha-satellite 'sudo journalctl -u ha-satellite -n 100 --no-pager'
-ssh ha-memo      'sudo journalctl -u ha-satellite -n 100 --no-pager'
-ssh ha-server    'sudo journalctl -u ha-server -n 100 --no-pager'
-```
+    /opt/ha/current/health-check.sh
+    sudo systemctl status ha-satellite --no-pager
+    sudo journalctl -u ha-satellite -f

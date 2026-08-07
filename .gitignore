@@ -43,21 +43,18 @@ dev/server/config/music-assistant-credentials.json
 dev/server/config/secrets.json
 dev/server/config/server.json
 dev/server/config/identity*.json
-dev/satellite/config/assistant.json
-dev/satellite/config/audio.json
-dev/satellite/config/server.json
-
-# Datos y secretos heredados de Music Assistant
+# Datos y secretos de Music Assistant
 dev/server/music-assistant/data/
 dev/server/.music-assistant.env
 
 # Modelos y entornos locales grandes
 dev/server/models/
-dev/server/wake-word/
-dev/server/wake-word-trainer/
-dev/satellite/models/
-dev/satellite/.venv/
+dev/server/.venv-kokoro/
+dev/server/.venv-moonshine/
+dev/server/moonshine-benchmark.json
+dev/server/config/tts.json
 dev/satellite/.tools/
+dev/satellite/.sendspin/
 
 # Sistema operativo y editores
 .DS_Store

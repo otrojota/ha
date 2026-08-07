@@ -26,21 +26,27 @@ mkdir -p "$WORK_DIR/apps" "$WORK_DIR/services" "$WORK_DIR/packages" "$WORK_DIR/d
 
 cp "$REPO_ROOT/package.json" "$REPO_ROOT/package-lock.json" "$WORK_DIR/"
 cp -R "$REPO_ROOT/apps/server" "$WORK_DIR/apps/server"
+cp -R "$REPO_ROOT/apps/display" "$WORK_DIR/apps/display"
+rm -rf "$WORK_DIR/apps/display/AUDIO_WORKERS.md"
 cp -R "$REPO_ROOT/services/music-gateway" "$WORK_DIR/services/music-gateway"
 cp -R "$REPO_ROOT/packages/contracts" "$WORK_DIR/packages/contracts"
 cp -R "$REPO_ROOT/packages/shared" "$WORK_DIR/packages/shared"
 cp -R "$SCRIPT_DIR/compose" "$WORK_DIR/deploy/compose"
 cp -R "$SCRIPT_DIR/systemd" "$WORK_DIR/deploy/systemd"
 cp "$SCRIPT_DIR/config/server.env" "$WORK_DIR/deploy/server.env.example"
-cp "$SCRIPT_DIR/install-release.sh" "$SCRIPT_DIR/health-check.sh" "$SCRIPT_DIR/migrate-config-v2.mjs" "$WORK_DIR/"
+cp "$SCRIPT_DIR/requirements-kokoro.txt" "$WORK_DIR/deploy/requirements-kokoro.txt"
+cp "$SCRIPT_DIR/install-release.sh" "$SCRIPT_DIR/health-check.sh" "$WORK_DIR/"
 sed "s/\"version\": \"[^\"]*\"/\"version\": \"$VERSION\"/" "$SCRIPT_DIR/manifest.json" > "$WORK_DIR/release-manifest.json"
 printf '%s\n' "$VERSION" > "$WORK_DIR/VERSION"
 
 find "$WORK_DIR" -name '*.test.js' -delete
 find "$WORK_DIR" -type d -name '__pycache__' -prune -exec rm -rf {} +
 find "$WORK_DIR" -name '*.pyc' -delete
+find "$WORK_DIR" -name '.DS_Store' -delete
+find "$WORK_DIR" -name '*.log' -delete
+rm -rf "$WORK_DIR/apps/server/benchmarks"
 chmod +x "$WORK_DIR/install-release.sh" "$WORK_DIR/health-check.sh" \
-  "$WORK_DIR/apps/server/wake-word-trainer/run.sh"
+  "$WORK_DIR/apps/server/ensure-whisper-model.sh"
 tar -C "$(dirname "$WORK_DIR")" -czf "$ARCHIVE" "$NAME"
 
 if command -v sha256sum >/dev/null 2>&1; then

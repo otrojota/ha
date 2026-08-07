@@ -1,0 +1,6 @@
+{
+  "AudioCaptureAllowed": false,
+  "AudioCaptureAllowedUrls": [
+    "https://macserver2.local"
+  ]
+}

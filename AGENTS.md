@@ -63,14 +63,10 @@ La Raspberry NO ejecutará modelos LLM grandes.
 
 ## Raspberry
 
-- Wake Word
-- Captura de audio
-- PipeWire
-- TTS Player
+- Chromium Kiosk con la aplicación servida por el backend
+- Captura, procesamiento y reproducción mediante Web Audio
 - Reproductor Music Assistant local mediante Sendspin
-- UI
 - Bluetooth
-- Comunicación con backend
 
 ## Backend
 
@@ -119,6 +115,11 @@ No acoplar las tools ni el agente directamente a Music Assistant; el acoplamient
 # Destinos Music Assistant
 
 La Raspberry aparece como reproductor de Music Assistant mediante el cliente oficial Sendspin en modo daemon. Music Assistant es la fuente única de orígenes, biblioteca, colas y destinos. No usar Spotify Connect ni librespot en el satélite.
+
+Sendspin se configura mediante el entorno del satélite, no desde la aplicación
+web. Music Gateway no asigna un destino predeterminado en la primera ejecución;
+un destino mencionado por voz queda persistido por `satelliteId` y se reutiliza
+en las órdenes posteriores.
 
 ---
 
@@ -197,7 +198,7 @@ Priorizar simplicidad, modularidad y posibilidad de crecer hacia múltiples Rasp
 
 ---
 
-# Estado implementado (15 de julio de 2026)
+# Estado implementado (6 de agosto de 2026)
 
 FenixIA no forma parte de este proyecto. El foco actual es voz, música y radio mediante Music Assistant, noticias/búsqueda web y futura integración con Home Assistant.
 
@@ -217,96 +218,83 @@ Los `docker-compose.yml` generales de `dev/server` y `dev/satellite` fueron reem
 - Si Music Assistant requiere autenticación, el servidor continúa iniciándose. El display permite iniciar sesión una vez; Music Gateway crea y persiste un token de larga duración sin guardar la contraseña.
 - `stopServer.sh` detiene servidor, SearXNG y sólo la instancia de Ollama que haya iniciado el propio entorno.
 - `stopServer.sh` detiene también el contenedor de Music Assistant administrado por este entorno.
-- `startSatellite.sh` inicia `apps/satellite` y `apps/display` nativamente para conservar acceso a CoreAudio/PipeWire.
-- Puertos predeterminados: servidor `3000`, API local del satélite `3200`, display `8080`, SearXNG local `8888`.
-- Logs: `dev/server/server.log`, `dev/server/ollama.log`, `dev/satellite/satellite.log` y `dev/satellite/display.log`.
+- `apps/server` sirve también la aplicación web del satélite desde su URL raíz.
+- `startSatellite.sh` y `stopSatellite.sh` administran únicamente el daemon oficial Sendspin de Music Assistant. Chromium Kiosk se administra por separado.
+- Puertos predeterminados: servidor y display `3000`, SearXNG local `8888`.
+- Logs principales: `dev/server/server.log`, `dev/server/ollama.log` y `dev/satellite/sendspin.log`.
 
-Para producción en Raspberry se recomienda `systemd` ejecutando Node en primer plano y gestionando reinicios. El satélite con audio real no debe ejecutarse dentro de Docker.
+En producción la Raspberry inicia Chromium Kiosk contra la URL HTTPS del
+servidor y el daemon oficial Sendspin para Music Assistant. No ejecuta Node ni
+contenedores para la aplicación de voz.
+
+En Fedora, `ha-server.service` es la unidad principal del stack. Al iniciarla
+levanta los contenedores Caddy, SearXNG, Music Assistant y, si está habilitado,
+Home Assistant, además de Music Gateway y Ollama local. Al detenerla propaga la
+detención a esos componentes; Docker permanece activo porque puede alojar
+otros proyectos.
 
 ## Captura de voz, wake word y STT
 
-`VoiceCapture`, en `apps/satellite/src/voice/voice-capture.js`, captura mediante `ffmpeg`, respeta dispositivo/canal seleccionado, extrae un único canal, remuestrea a PCM mono de 16 kHz, segmenta por silencio y publica el nivel RMS para el display.
+`BrowserAudioController`, en `apps/display/public/audio`, abre el micrófono con
+`getUserMedia`. Un AudioWorklet extrae el canal elegido y un Web Worker
+remuestrea a PCM mono de 16 kHz, construye frames de 20 ms y mantiene el
+WebSocket sin bloquear la hebra de la GUI.
 
-La wake word es el nombre configurable del asistente y se persiste en:
+El mismo PCM se transmite al servidor por WebSocket mediante frames `HAI1` de
+20 ms. El servidor mantiene métricas y una sesión aislada por `satelliteId`.
+Cada sesión conserva un ring buffer PCM de 3 segundos, lo reinicia ante pérdidas
+o saltos temporales y mantiene el estado conversacional autoritativo. El
+diagnóstico está en `GET /voice/input/sessions`; no expone audio.
 
-```text
-dev/satellite/config/assistant.json
-```
+El mismo Whisper STT reconoce continuamente la frase de activación española y
+el comando posterior; no existe un modelo de wake word adicional.
+`voice.wake-word.configured` anuncia la frase asignada al satélite.
 
-El valor actual puede cambiarse desde Configuración del display. La API valida formato y que todas las palabras existan en el vocabulario español de Vosk antes de guardar y reinicia el detector en caliente:
+`VoiceStateCoordinator` en el servidor es la autoridad del
+estado conversacional. Publica `voice.state.changed`, asigna un `activationId`,
+controla timeouts. El display sólo representa ese evento. El botón manual envía
+`voice.listen.requested`; no inicia una captura distinta porque el PCM ya fluye.
+`GET /voice/states` expone el diagnóstico actual.
 
-```text
-GET /assistant
-PUT /assistant
-```
+`ContinuousVoiceRecognitionService` delimita voz sobre el PCM continuo,
+construye ventanas WAV en memoria y las envía al proceso persistente de Whisper.
+Publica transcripciones parciales, detecta la frase en cualquier posición y
+aplica como comando lo posterior al cerrar por silencio. Durante la captura del
+comando, `stop`, `detente` y `alto` se conservan como palabras normales. Sólo
+interrumpen cuando el estado es `speaking`, mientras se reproduce el TTS.
+`GET /voice/pipeline` expone sus métricas. No existe STT local de respaldo.
 
-El detector local usa Vosk (`apps/satellite/src/voice/vosk_detector.py`) con el modelo `vosk-model-small-es-0.42`. No requiere entrenamiento al cambiar el nombre. Para reducir falsos positivos con televisión o música:
+La wake word y la identidad del satélite se guardan en `localStorage` del perfil
+Chromium y se anuncian al servidor al registrar el stream.
 
-- Sólo acepta resultados Vosk finalizados, nunca parciales.
-- Exige confianza mínima configurable (`WAKE_WORD_MIN_CONFIDENCE`, actualmente `0.82`).
-- Cooldown actual de 5 segundos.
-- Ventana de comando actual de 4 segundos.
-- Una activación consume una sola frase y no se prolonga con detecciones repetidas.
-- Si se pronuncia únicamente la wake word, permite una única frase posterior.
-- El servidor descarta transcripciones de ruido como `[Música]`, `[Motor]` y `[SILENCIO]`.
-
-El audio activado se envía a `POST /stt/transcribe`. El backend usa `whisper.cpp` (`whisper-cli`) con el modelo configurado en `dev/server/.env`. Whisper sólo se ejecuta durante una activación válida de Vosk.
+El backend usa `whisper.cpp` (`whisper-server`) con el modelo configurado en
+`dev/server/.env`. En QA usa `small` para que el STT continuo responda en tiempo
+real sobre CPU; `large-v3` permanece descargado para uso futuro.
+En Fedora Asahi, la instalación usa un binario separado con el backend Vulkan
+sobre la GPU Apple y conserva el binario CPU como respaldo.
 
 ## Configuración y abstracción de audio
 
-Desde el display se configuran entrada, canal físico, salida exclusiva de TTS y voz. Se persiste en:
+Desde el display se configuran entrada, canal físico y salida exclusiva de TTS.
+Los identificadores se guardan en `localStorage` y se aplican con
+`getUserMedia` y `AudioContext.setSinkId` cuando está disponible.
 
-```text
-dev/satellite/config/audio.json
-```
+La voz se elige también desde el display, pero se persiste centralmente en `dev/server/config/tts.json`, asociada al `satelliteId`.
 
-Formato:
-
-```json
-{
-  "inputDeviceIds": [],
-  "inputDeviceNames": {},
-  "inputChannelsByDevice": {},
-  "outputDeviceIds": [],
-  "outputDeviceNames": {},
-  "ttsVoiceId": null
-}
-```
-
-Los IDs efectivos y el canal activo se calculan al consultar la API; no se
-persisten duplicados. El contrato persistido es estricto y no admite campos de
-versiones anteriores.
-
-`inputChannel` es base cero internamente y base uno en la GUI. La selección de salida TTS no modifica la ruta de música.
-Las listas `inputDeviceIds` y `outputDeviceIds` están ordenadas por prioridad. Cada nueva selección pasa al primer lugar y las anteriores quedan como fallback automático. Los nombres permiten reencontrar dispositivos CoreAudio aunque macOS cambie sus índices; el canal de entrada se conserva por dispositivo.
-
-Proveedores bajo `apps/satellite/src/audio`:
-
-- `CoreAudioDeviceProvider`: AVFoundation/`ffmpeg` para entradas y `say -a '?'` para salidas en macOS.
-- `PipeWireAudioDeviceProvider`: `pactl` sobre PipeWire para Raspberry/Linux.
-- `SimulatedAudioDeviceProvider`: fallback para CI y modo simulador.
-
-API local:
-
-```text
-GET /audio
-GET /audio/input-channels?deviceId=...
-PUT /audio
-```
-
-La enumeración multicanal fue probada con una Behringer UMC404HD.
+`inputChannel` es base cero internamente y base uno en la GUI. La selección de
+salida TTS no modifica la ruta de música. No existe API de audio local.
 
 ## TTS
 
-La síntesis ocurre en el satélite, no en el servidor. El servidor emite `assistant.speech.requested` dirigido al `satelliteId` que originó la consulta; mensajes de conexión o procesamiento no se leen.
+La síntesis está centralizada en el servidor y se asigna por `satelliteId`. `TtsStreamService` transmite PCM mono de 16 bits por el WebSocket registrado del satélite mediante eventos de inicio/fin y frames binarios secuenciados. Las asignaciones se guardan en `dev/server/config/tts.json`.
 
-Proveedores bajo `apps/satellite/src/tts`:
+Kokoro es el único motor TTS. Genera audio incrementalmente en el servidor; el
+satélite no instala voces ni sintetiza y reproduce el stream mediante un
+AudioWorklet.
 
-- macOS: `say`, usando voz española y el ID CoreAudio configurado.
-- Raspberry/Linux: Piper local genera WAV y `pw-play --target` lo reproduce mediante PipeWire.
-- Simulado: registra el texto sin reproducir audio.
-
-Durante TTS la captura se pausa para evitar realimentación y se reanuda 200 ms después. Si no hay salida configurada, la respuesta sólo se muestra. En Raspberry todavía hay que instalar Piper y colocar modelos `.onnx` en `dev/satellite/models/piper`; se descubren automáticamente.
+Durante TTS la captura continúa para reconocer una interrupción hablada; el AEC
+del speakerphone evita la realimentación. Si no hay salida configurada, la
+respuesta sólo se muestra.
 
 ## LLM, agente y tools
 
@@ -372,7 +360,7 @@ Configuraciones táctiles actuales:
 
 - Nombre/wake word.
 - Entrada, canal y salida de audio.
-- Voz TTS instalada en la plataforma.
+- Voz TTS central asignada a este satélite.
 - Ubicación manual y sugerencia por IP.
 
 Existe un teclado virtual local reutilizable en `apps/display/public/virtual-keyboard.js` y `.css`. Se abre al enfocar cualquier input, incluye distribución española, acentos, mayúsculas, borrado, cursores y teclado numérico para coordenadas. No depende de un escritorio ni de conexión a Internet.
@@ -381,27 +369,28 @@ Existe un teclado virtual local reutilizable en `apps/display/public/virtual-key
 
 Definidos en `packages/contracts/src/index.js`:
 
-Todos los eventos incluyen `protocolVersion: "2"`; servidor, satélite y display
-rechazan eventos y anuncios mDNS de protocolos anteriores.
+Todos los eventos incluyen `protocolVersion: "5"`; servidor y aplicación web
+validan que el protocolo coincida.
 
 ```text
 satellite.connected
 satellite.heartbeat
-audio.level.updated
-voice.wake-word.detected
+voice.state.changed
+voice.listen.requested
+voice.wake-word.configured
 voice.transcript.received
 assistant.processing.started
 assistant.response.created
-assistant.speech.requested
-music.playback.changed
+assistant.speech.stream.started
+assistant.speech.stream.ended
+assistant.speech.stream.failed
+assistant.speech.playback.ended
 weather.updated
 ```
 
 ## Pendientes recomendados
 
-- Implementar una tool meteorológica usando la ubicación configurada y publicar `weather.updated`.
-- Implementar comandos de música/radio a través de `MusicGateway`, sin acoplar el agente a Music Assistant o Spotify.
-- Instalar y validar Piper/voz española en Raspberry Pi.
-- Añadir AEC/barge-in real; por ahora la captura simplemente se pausa durante TTS.
-- Convertir los scripts de producción en unidades `systemd` y validar Chromium Kiosk sobre Raspberry Pi OS Lite.
+- Validar Kokoro y sus voces españolas en el servidor Fedora ARM64.
+- Validar Chromium Kiosk y los permisos persistentes de micrófono en Raspberry Pi OS Lite.
+- Evaluar una alternativa web a Sendspin cuando Music Assistant exponga un SDK de reproductor estable para navegadores.
 - Añadir pruebas automatizadas persistentes para tools, memoria, filtros de ruido y componentes del display.

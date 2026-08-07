@@ -702,7 +702,7 @@ test("prioriza el identificador opaco de portadas de MA 2.9", () => {
   const proxyId = "a".repeat(64);
   const item = provider.normalizeItem({
     name: "Tema",
-    image_url: "https://i.scdn.co/legacy-cover.jpg",
+    image_url: "https://i.scdn.co/proxy-cover.jpg",
     metadata: {
       images: [{ path: "https://i.scdn.co/cover.jpg", provider: "spotify--123", proxy_id: proxyId }]
     }

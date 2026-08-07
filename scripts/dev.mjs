@@ -2,9 +2,7 @@ import { spawn } from "node:child_process";
 
 const services = [
   ["music", ["run", "dev", "--workspace", "@ha/music-gateway"]],
-  ["server", ["run", "dev", "--workspace", "@ha/server"]],
-  ["display", ["run", "dev", "--workspace", "@ha/display"]],
-  ["satellite", ["run", "dev", "--workspace", "@ha/satellite"]]
+  ["server", ["run", "dev", "--workspace", "@ha/server"]]
 ];
 
 const children = services.map(([name, args]) => {
@@ -21,4 +19,3 @@ function stop() {
 
 process.on("SIGINT", stop);
 process.on("SIGTERM", stop);
-
